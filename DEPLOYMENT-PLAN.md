@@ -7,7 +7,7 @@ Transition from Docker-based local development to scalable cloud infrastructure:
 - **Modal.com**: Stateful serverless code execution (replaces Docker sandboxes)
 - **AWS RDS**: Managed PostgreSQL (main app + LangGraph checkpoints)
 - **AWS S3**: Single bucket with `input/` and `output/` prefixes for datasets and artifacts
-- **Modal Volume**: Per-session workspace for isolated runtime environments
+- **Modal Volume**: Per-session workspace for isolated runtime environments, also handles ingestion pipeline (simplification)
 - **Railway/Render**: Backend (FastAPI) + Frontend (React) hosting
 
 **Philosophy**: Replace custom infrastructure with managed services. Simplify artifact pipeline (Modal handles all file operations). One Modal instance per session for true isolation.
@@ -17,6 +17,8 @@ Transition from Docker-based local development to scalable cloud infrastructure:
 ## Phase 1: Replace Docker Sandbox with Modal
 
 **Goal**: Replace Docker-in-Docker sandbox with Modal stateful functions sharing a persistent workspace.
+
+Ingestion pipeline will be greatly simplified: Modal will manage all artifacts uploads to S3 (see later on, point 2.4)
 
 ### 1.1 Modal Setup & Configuration
 
@@ -120,22 +122,8 @@ def driver_program():
                     print(f"Execution Error: {e}", file=sys.stderr)
             
             # Detect new artifacts in /workspace/artifacts/
-            artifacts = []
-            artifacts_dir = Path("/workspace/artifacts")
-            if artifacts_dir.exists():
-                for file_path in artifacts_dir.rglob("*"):
-                    if file_path.is_file():
-                        # Compute SHA-256
-                        sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
-                        mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-                        
-                        artifacts.append({
-                            "name": file_path.name,
-                            "path": str(file_path),
-                            "sha256": sha256,
-                            "mime": mime,
-                            "size": file_path.stat().st_size
-                        })
+            # needs to be integrated with s3 bucket
+            # ... 
             
             print(json.dumps({
                 "stdout": stdout_io.getvalue(),
@@ -164,7 +152,7 @@ app = modal.App.lookup("lg-urban-executor", create_if_missing=True)
 # Define image with all dependencies
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install_from_requirements("requirements.txt")
+    .pip_install_from_requirements("requirements.txt")  # are these installed every time and slow down app start? 
     .copy_local_file("driver.py", "/root/driver.py")  # Copy driver to image
 )
 
@@ -190,7 +178,7 @@ class SandboxExecutor:
             workdir="/workspace"
         )
         
-        # Start driver program with stdin/stdout pipes
+        # Start driver program with stdin/stdout pipes (why pipes? it was suggested by claude but idk)
         self.process = self.sandbox.exec(
             "python", "/root/driver.py",
             stdin=modal.PIPE,
@@ -209,6 +197,7 @@ class SandboxExecutor:
         
         # Upload artifacts to S3 using production-ready Volume access
         # Note: Files must be synced from sandbox to volume first (happens on exec completion)
+        # to be sure about this volumes sync (and if it is the best approach) check Modal docs
         if result.get("artifacts"):
             s3_client = boto3.client('s3')
             bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
@@ -221,6 +210,8 @@ class SandboxExecutor:
                     file_bytes += chunk
                 
                 # Upload to S3 with content-addressed path
+                # This is the replacement for the old ingestion pipeline - much needed simplification 
+ 
                 s3_key = f"output/artifacts/{artifact['sha256'][:2]}/{artifact['sha256'][2:4]}/{artifact['sha256']}"
                 s3_client.put_object(
                     Bucket=bucket,
@@ -255,10 +246,10 @@ class SandboxExecutor:
 - `select_dataset(dataset_id: str, session_id: str) -> dict`
 - Logic:
 
-  1. Check if dataset exists in S3_DATASETS_BUCKET (heavy datasets)
-  2. If yes: download from S3 to `/workspace/{dataset_id}.parquet`
+  1. Check if dataset exists in S3 bucket (the input part for heavy datasets)
+  2. If yes: download from S3 to `/workspace/{dataset_id}.parquet` (how to input files into sandbox? need to check Modal docs...)
   3. If no: assume API dataset, fetch via Bologna OpenData API
-  4. Save to `/workspace/{dataset_id}.parquet`
+  4. Save to `/workspace/{dataset_id}.parquet` (same as above: how exactly?)
 
 - Return path in workspace
 
@@ -268,16 +259,15 @@ class SandboxExecutor:
 
 - `export_dataset(workspace_path: str, session_id: str) -> dict`
 - Read file from `/workspace/{path}`
-- Upload to S3_ARTIFACTS_BUCKET with timestamp prefix
-- Return S3 presigned URL (24h expiry)
+- Upload to S3 bucket with timestamp prefix
+- Return S3 presigned URL (24h expiry- or  maybe more)
 
 ### 1.6 Implement List Files Tool
 
 **Create Modal function** in `backend/modal_runtime/tools.py`:
 
-- `list_workspace_files(session_id: str) -> list[dict]`
-- List files in `/workspace/` (Modal Volume)
-- Optionally list available datasets in S3_DATASETS_BUCKET
+- `list_datasets(session_id: str) -> list[dict]`
+- List available datasets in S3 bucket together with files in `/workspace/` (Modal Volume)
 - Return file metadata (name, size, modified time)
 
 ### 1.7 Refactor LangGraph Tools
@@ -287,7 +277,7 @@ class SandboxExecutor:
 - Replace `make_code_sandbox_tool()` to call Modal `CodeExecutor.execute()`
 - Replace `make_select_dataset_tool()` to call Modal `select_dataset()`
 - Replace `make_export_datasets_tool()` to call Modal `export_dataset()`
-- Replace `make_list_datasets_tool()` to call Modal `list_workspace_files()`
+- Replace `make_list_datasets_tool()` to call Modal `list_datasets()`
 
 **Key changes**:
 
@@ -295,6 +285,10 @@ class SandboxExecutor:
 - Call Modal functions via Modal client: `executor.execute.remote(code)`
 - Handle Modal authentication via `modal.Secret` or env vars
 - Update artifact ingestion to use S3 keys instead of local paths
+
+### 1.8 Create new prompt 
+
+- Update/create prompt for analyst agent informing him about the tools and the details of how he needs to execute code.
 
 ---
 
