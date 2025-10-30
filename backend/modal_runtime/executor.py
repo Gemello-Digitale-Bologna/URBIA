@@ -17,7 +17,6 @@ class SandboxExecutor:
             create_if_missing=True
         )
         
-        # Create sandbox with volume mounted
         self.sandbox = modal.Sandbox.create(
             app=app,
             image=image,
@@ -27,13 +26,7 @@ class SandboxExecutor:
             workdir="/workspace"
         )
         
-        # Start driver program with stdin/stdout pipes
-        # PIPE allows bidirectional communication with the driver
-        self.process = self.sandbox.exec(
-            "python", "/root/driver.py",
-            stdin=modal.PIPE,   # Send commands to driver
-            stdout=modal.PIPE   # Receive responses from driver
-        )
+        self.process = self.sandbox.exec("python", "/root/driver.py")
     
     def execute(self, code: str, timeout: int = 120) -> Dict[str, Any]:
         """Execute code and return results.
@@ -44,12 +37,13 @@ class SandboxExecutor:
         try:
             # Send command to driver
             command = json.dumps({"code": code})
-            self.process.stdin.write(command + "\n")
+            self.process.stdin.write((command + "\n").encode('utf-8'))
+            self.process.stdin.drain()  # Ensure data is flushed
             self.process.stdin.flush()
             
             # Read response line
             result_line = self.process.stdout.readline()
-            result = json.loads(result_line)
+            result = json.loads(result_line.decode('utf-8'))
             
             # Driver already handled artifacts, just return result
             return result
@@ -68,7 +62,7 @@ class SandboxExecutor:
             self.process.stdin.close()
             
             # Wait for process to finish gracefully
-            self.process.wait(timeout=30)
+            self.process.wait()
             
         except Exception as e:
             print(f"Error during graceful termination: {e}")
