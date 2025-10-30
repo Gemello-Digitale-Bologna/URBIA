@@ -5,12 +5,11 @@ S3-only artifact ingestion: insert metadata for files uploaded by Modal.
 
 from __future__ import annotations
 import uuid
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .storage import create_artifact
 # Tokens removed; downloads use S3 presigned URLs via API
 
 
