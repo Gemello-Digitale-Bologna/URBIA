@@ -1,5 +1,4 @@
 # backend/modal_runtime/tools.py
-import os
 import hashlib
 import mimetypes
 from pathlib import Path
@@ -8,8 +7,12 @@ from typing import List, Dict, Any
 import modal
 import pandas as pd
 
-from .app import app, image  # image must include pandas in requirements
-from .session import volume_name
+from backend.modal_runtime.session import volume_name
+
+app = modal.App("lg-urban-executor")
+image = modal.Image.debian_slim(python_version="3.11")\
+    .pip_install_from_requirements("backend/modal_runtime/requirements.txt")\
+    .add_local_file("backend/modal_runtime/driver.py", "/root/driver.py")
 
 WORKSPACE_VOLUME = modal.Volume.from_name(volume_name(), create_if_missing=True)
 
@@ -24,14 +27,13 @@ def _walk_files(base: Path, exts: set) -> List[Path]:
 @app.function(
     image=image,
     volumes={"/workspace": WORKSPACE_VOLUME},
-    workdir="/workspace",
     timeout=60,
 )
-def list_datasets(workspace_path: str = "/workspace", subdir: str = "datasets") -> List[Dict[str, Any]]:
+def list_loaded_datasets(workspace_path: str = "/workspace", subdir: str = "datasets") -> List[Dict[str, Any]]:
     """
     List datasets in the workspace. Return structured metadata.
     """
-    datasets_dir = Path("/workspace") / subdir
+    datasets_dir = Path(workspace_path) / subdir
 
     exts = {".csv", ".parquet", ".xlsx", ".xls"}
     out: List[Dict[str, Any]] = []
@@ -46,11 +48,10 @@ def list_datasets(workspace_path: str = "/workspace", subdir: str = "datasets") 
             "mime": mimetypes.guess_type(p.name)[0] or "application/octet-stream",
         })
     return out
-
+'''
 @app.function(
     image=image,
     volumes={"/workspace": WORKSPACE_VOLUME},
-    workdir="/workspace",
     timeout=180,
     secrets=[modal.Secret.from_name("aws-credentials")],  # store AWS creds in Modal
 )
@@ -94,12 +95,11 @@ def export_dataset(dataset_path: str,
     except Exception as e:
         return {"error": f"S3 upload failed: {e}"}
 
-
+'''
 # Accept dataset bytes from backend and persist into the sandbox, returning summary
 @app.function(
     image=image,
     volumes={"/workspace": WORKSPACE_VOLUME},
-    workdir="/workspace",
     timeout=180,
 )
 def write_dataset_bytes(dataset_id: str, data_b64: str, ext: str = "parquet", subdir: str = "datasets") -> Dict[str, Any]:

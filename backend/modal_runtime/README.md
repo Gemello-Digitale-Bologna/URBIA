@@ -18,7 +18,7 @@ The purpose of this driver is to be always running while the sandbox exist, in o
 
 Furthermore, it also: 
 - mantains the sandbox stateful by updating the `globals` dictionary with the local variables produced at each run;
-- scans the work directory for produced artifacts and uploads them to S3 directly from inside the sandbox using `boto3`.
+- scans the work directory for produced artifacts (*except for datasets: those are handled in tools) and uploads them to S3 directly from inside the sandbox using `boto3`.
 
 S3 specifics:
 - The bucket name is read from the `S3_BUCKET` env var inside the sandbox.
@@ -31,6 +31,25 @@ It only has 2 methods:
 
 - `execute` to execute a given code (through the driver);
 - `terminate` to terminate the sandbox istance at session end;
+
+## Important Notes
+
+There is an important difference between using `App.lookup` or just `App` in `Modal`. 
+
+### `app = modal.App("name")`
+Creates/defines an app with functions attached to it.
+
+- Use this in your source code where you define functions with @app.function()
+- The app object has your functions registered on it
+
+### `app = modal.App.lookup("name")`
+
+Finds an already-deployed app by name.
+
+Use this to call functions from a deployed app
+
+- Returns an empty app object (no functions attached)
+- You then use modal.Function.from_name() to get the deployed functions
 
 ## Tests
 
