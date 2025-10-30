@@ -7,14 +7,12 @@ from typing import List, Dict, Any
 import modal
 import pandas as pd
 
-from backend.modal_runtime.session import volume_name
-
 app = modal.App("lg-urban-executor")
 image = modal.Image.debian_slim(python_version="3.11")\
     .pip_install_from_requirements("backend/modal_runtime/requirements.txt")\
     .add_local_file("backend/modal_runtime/driver.py", "/root/driver.py")
 
-WORKSPACE_VOLUME = modal.Volume.from_name(volume_name(), create_if_missing=True)
+WORKSPACE_VOLUME = modal.Volume.from_name("lg-urban", create_if_missing=True)
 
 def _walk_files(base: Path, exts: set) -> List[Path]:
     files = []
@@ -48,7 +46,7 @@ def list_loaded_datasets(workspace_path: str = "/workspace", subdir: str = "data
             "mime": mimetypes.guess_type(p.name)[0] or "application/octet-stream",
         })
     return out
-'''
+
 @app.function(
     image=image,
     volumes={"/workspace": WORKSPACE_VOLUME},
@@ -95,7 +93,6 @@ def export_dataset(dataset_path: str,
     except Exception as e:
         return {"error": f"S3 upload failed: {e}"}
 
-'''
 # Accept dataset bytes from backend and persist into the sandbox, returning summary
 @app.function(
     image=image,
@@ -146,4 +143,4 @@ def write_dataset_bytes(dataset_id: str, data_b64: str, ext: str = "parquet", su
     except Exception as e:
         summary["preview_error"] = f"{e}"
 
-    return summary
+    return summary   

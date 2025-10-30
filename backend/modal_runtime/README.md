@@ -51,6 +51,14 @@ Use this to call functions from a deployed app
 - Returns an empty app object (no functions attached)
 - You then use modal.Function.from_name() to get the deployed functions
 
+### So... why don't we deploy? 
+
+We are testing everything out before deploying. And, in order to do that, we actually need to run the `test_functions.py` script with 
+
+```bash
+(langgraph-py3.11) matteo@pcmatteo:~/LG-Urban$ modal run backend/modal_runtime/tests/test_functions.py
+```
+
 ## Tests
 
 Inside the [tests/](./tests/) folder we wrote basic tests to check the implementation:
