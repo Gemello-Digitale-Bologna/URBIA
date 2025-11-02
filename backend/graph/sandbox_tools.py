@@ -85,48 +85,79 @@ async def load_dataset_tool(
     - Else, if not too heavy, fetch from the OpenData API.
     Returns the written path (relative to /workspace).
     """
-    import boto3
-
-    s3 = boto3.client("s3")
-    input_bucket = os.getenv("S3_BUCKET")
-    if not input_bucket:
-        return Command(update={"messages": [ToolMessage(
-            content="Missing S3_BUCKET env var",
-            tool_call_id=runtime.tool_call_id
-        )]})
-
-    # Try S3 first (input/datasets/{dataset_id}.parquet)
-    data_bytes = None
-    s3_key = f"input/datasets/{dataset_id}.parquet"
     try:
-        s3.head_object(Bucket=input_bucket, Key=s3_key)
-        data_bytes = s3.get_object(Bucket=input_bucket, Key=s3_key)["Body"].read()
-    except Exception:
-        # fetching from api: is it too heavy?
-        too_heavy = await is_dataset_too_heavy(client=client, dataset_id=dataset_id)
-        if too_heavy:
+        import boto3
+
+        s3 = boto3.client("s3")
+        input_bucket = os.getenv("S3_BUCKET")
+        if not input_bucket:
             return Command(update={"messages": [ToolMessage(
-                content=f"Dataset '{dataset_id}' is too large to fetch from API.",
+                content="Error: Missing S3_BUCKET environment variable.",
                 tool_call_id=runtime.tool_call_id
             )]})
-        # fetch from api
-        data_bytes = await get_dataset_bytes(client=client, dataset_id=dataset_id)
-    
-    # write into modal workspace
-    session_id = str(get_thread_id())
-    write_dataset_bytes = _get_modal_function("write_dataset_bytes")    
-    write_dataset_bytes.remote(
-        dataset_id=dataset_id,
-        data_b64=base64.b64encode(data_bytes).decode("utf-8"),
-        session_id=session_id,
-        ext='parquet',
-        subdir="datasets",
-    )    
 
-    return Command(update={"messages": [ToolMessage(
-        content=f"Dataset '{dataset_id}' loaded successfully at /workspace/datasets/{dataset_id}.parquet",
-        tool_call_id=runtime.tool_call_id
-    )]})
+        # Try S3 first (input/datasets/{dataset_id}.parquet)
+        data_bytes = None
+        s3_key = f"input/datasets/{dataset_id}.parquet"
+        
+        try:
+            s3.head_object(Bucket=input_bucket, Key=s3_key)
+            data_bytes = s3.get_object(Bucket=input_bucket, Key=s3_key)["Body"].read()
+        except Exception:
+            # Not in S3, try fetching from API
+            try:
+                # Check if dataset is too heavy
+                too_heavy = await is_dataset_too_heavy(client=client, dataset_id=dataset_id)
+                if too_heavy:
+                    return Command(update={"messages": [ToolMessage(
+                        content=f"Error: Dataset '{dataset_id}' is too large to fetch from the API. Please use a pre-uploaded dataset from S3.",
+                        tool_call_id=runtime.tool_call_id
+                    )]})
+                
+                # Fetch from API
+                data_bytes = await get_dataset_bytes(client=client, dataset_id=dataset_id)
+                
+                if not data_bytes:
+                    return Command(update={"messages": [ToolMessage(
+                        content=f"Error: Dataset '{dataset_id}' not found or returned empty data. Please check the dataset ID.",
+                        tool_call_id=runtime.tool_call_id
+                    )]})
+                    
+            except Exception as api_err:
+                return Command(update={"messages": [ToolMessage(
+                    content=f"Error: Failed to fetch dataset '{dataset_id}' from API. It may not exist or be unavailable. Error: {str(api_err)}",
+                    tool_call_id=runtime.tool_call_id
+                )]})
+        
+        # Write into modal workspace
+        session_id = str(get_thread_id())
+        write_dataset_bytes = _get_modal_function("write_dataset_bytes")
+        
+        try:
+            write_dataset_bytes.remote(
+                dataset_id=dataset_id,
+                data_b64=base64.b64encode(data_bytes).decode("utf-8"),
+                session_id=session_id,
+                ext='parquet',
+                subdir="datasets",
+            )
+        except Exception as modal_err:
+            return Command(update={"messages": [ToolMessage(
+                content=f"Error: Failed to write dataset to Modal workspace. Error: {str(modal_err)}",
+                tool_call_id=runtime.tool_call_id
+            )]})
+
+        return Command(update={"messages": [ToolMessage(
+            content=f"Dataset '{dataset_id}' loaded successfully at /workspace/datasets/{dataset_id}.parquet",
+            tool_call_id=runtime.tool_call_id
+        )]})
+        
+    except Exception as e:
+        # Catch-all for any unexpected errors
+        return Command(update={"messages": [ToolMessage(
+            content=f"Error: Unexpected error loading dataset '{dataset_id}': {str(e)}",
+            tool_call_id=runtime.tool_call_id
+        )]})
 
 @tool(
     name_or_callable="list_datasets",
