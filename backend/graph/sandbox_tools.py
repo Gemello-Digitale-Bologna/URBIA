@@ -61,7 +61,14 @@ def terminate_session_executor(session_id: str) -> None:
 def execute_code_tool(code: Annotated[str, "The python code to execute."],
                  runtime: ToolRuntime) -> Command:
     """Use this to execute python code."""
-    session_id = str(get_thread_id())
+    thread_id = get_thread_id()
+    if not thread_id:
+        return Command(update={"messages": [ToolMessage(
+            content="Error: thread_id not set in context. Cannot execute code.",
+            tool_call_id=runtime.tool_call_id
+        )]})
+    
+    session_id = str(thread_id)
     executor = get_or_create_executor(session_id)
     result = executor.execute(code)
 
@@ -73,7 +80,7 @@ def execute_code_tool(code: Annotated[str, "The python code to execute."],
 
 @tool(
     name_or_callable="load_dataset",
-    description="Use this to load a dataset into the sandbox environment. Returns the written path (relative to /workspace)."
+    description="Load a dataset by ID into the workspace. After loading, you can access it in code with the code execution tool at the path 'datasets/{dataset_id}.parquet' from the working directory."
 )
 async def load_dataset_tool(
     dataset_id: Annotated[str, "The dataset ID to load."],
@@ -130,11 +137,18 @@ async def load_dataset_tool(
                 )]})
         
         # Write into modal workspace
-        session_id = str(get_thread_id())
+        thread_id = get_thread_id()
+        if not thread_id:
+            return Command(update={"messages": [ToolMessage(
+                content="Error: thread_id not set in context. Cannot write dataset to Modal workspace.",
+                tool_call_id=runtime.tool_call_id
+            )]})
+        
+        session_id = str(thread_id)
         write_dataset_bytes = _get_modal_function("write_dataset_bytes")
         
         try:
-            write_dataset_bytes.remote(
+            result = write_dataset_bytes.remote(
                 dataset_id=dataset_id,
                 data_b64=base64.b64encode(data_bytes).decode("utf-8"),
                 session_id=session_id,
@@ -147,8 +161,11 @@ async def load_dataset_tool(
                 tool_call_id=runtime.tool_call_id
             )]})
 
+        # Return the full result from Modal (includes actual path, shape, columns, etc.)
+        # Add a clear note about the path to use in code
+        result["note"] = f"Dataset loaded. In code, use: pd.read_parquet('{result['rel_path']}')"
         return Command(update={"messages": [ToolMessage(
-            content=f"Dataset '{dataset_id}' loaded successfully at /workspace/datasets/{dataset_id}.parquet",
+            content=json.dumps(result, ensure_ascii=False, default=json_serializer),
             tool_call_id=runtime.tool_call_id
         )]})
         
@@ -161,14 +178,65 @@ async def load_dataset_tool(
 
 @tool(
     name_or_callable="list_datasets",
-    description="Use this to list all datasets currently loaded in the sandbox."
+    description="List available datasets from S3 and datasets already loaded in the current workspace."
 )
 def list_datasets_tool(runtime: ToolRuntime) -> Command:
-    """Use this to list all datasets currently loaded in the sandbox."""
-    session_id = str(get_thread_id())
-    list_loaded_datasets = _get_modal_function("list_loaded_datasets")
-    datasets = list_loaded_datasets.remote(session_id=session_id)
-    return Command(update={"messages": [ToolMessage(content=json.dumps(datasets, ensure_ascii=False), tool_call_id=runtime.tool_call_id)]})
+    """
+    List datasets in two categories:
+    1. Available in S3 input bucket (ready to load)
+    2. Already loaded in current Modal workspace
+    """
+    import boto3
+    
+    thread_id = get_thread_id()
+    if not thread_id:
+        return Command(update={"messages": [ToolMessage(
+            content="Error: thread_id not set in context. Cannot list datasets.",
+            tool_call_id=runtime.tool_call_id
+        )]})
+    
+    result = {"available_in_s3": [], "loaded_in_workspace": []}
+    
+    # 1. List available datasets from S3 input bucket
+    try:
+        s3 = boto3.client("s3")
+        bucket = os.getenv("S3_BUCKET")
+        if bucket:
+            response = s3.list_objects_v2(Bucket=bucket, Prefix="input/datasets/")
+            if "Contents" in response:
+                for obj in response["Contents"]:
+                    key = obj["Key"]
+                    # Skip the prefix itself if it's listed as an object
+                    if key.endswith("/"):
+                        continue
+                    # Extract dataset_id from key (input/datasets/DATASET_ID.parquet)
+                    filename = key.split("/")[-1]
+                    dataset_id = filename.rsplit(".", 1)[0]  # Remove extension
+                    result["available_in_s3"].append({
+                        "dataset_id": dataset_id,
+                        "s3_key": key,
+                        "size_mb": round(obj["Size"] / (1024 * 1024), 3),
+                        "last_modified": obj["LastModified"].isoformat()
+                    })
+    except Exception as e:
+        result["s3_error"] = f"Failed to list S3 datasets: {str(e)}"
+    
+    # 2. List datasets already loaded in Modal workspace
+    try:
+        session_id = str(thread_id)
+        list_loaded_datasets = _get_modal_function("list_loaded_datasets")
+        loaded = list_loaded_datasets.remote(session_id=session_id)
+        result["loaded_in_workspace"] = loaded
+    except Exception as e:
+        result["workspace_error"] = f"Failed to list loaded datasets: {str(e)}"
+    
+    # Add helpful note for the model
+    result["note"] = "You can load datasets from S3 into the datasets/ directory using the load_dataset() tool."
+    
+    return Command(update={"messages": [ToolMessage(
+        content=json.dumps(result, ensure_ascii=False, default=json_serializer),
+        tool_call_id=runtime.tool_call_id
+    )]})
 
 @tool(
     name_or_callable="export_dataset",
@@ -183,7 +251,15 @@ def export_dataset_tool(dataset_path: Annotated[str, "The path of the dataset to
             content="Missing S3_BUCKET env var",
             tool_call_id=runtime.tool_call_id
         )]})
-    session_id = str(get_thread_id())
+    
+    thread_id = get_thread_id()
+    if not thread_id:
+        return Command(update={"messages": [ToolMessage(
+            content="Error: thread_id not set in context. Cannot export dataset.",
+            tool_call_id=runtime.tool_call_id
+        )]})
+    
+    session_id = str(thread_id)
     export_dataset = _get_modal_function("export_dataset")
     result = export_dataset.remote(dataset_path, bucket, session_id=session_id)
     return Command(update={"messages": [ToolMessage(content=json.dumps(result, ensure_ascii=False), tool_call_id=runtime.tool_call_id)]})
