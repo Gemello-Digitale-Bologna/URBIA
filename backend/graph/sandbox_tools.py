@@ -106,7 +106,7 @@ async def load_dataset_tool(
     
     # write into modal workspace
     session_id = str(get_thread_id())
-    write_dataset_bytes = _get_modal_function("write_dataset_bytes")
+    write_dataset_bytes = _get_modal_function("write_dataset_bytes")    
     summary = write_dataset_bytes.remote(
         dataset_id=dataset_id,
         data_b64=base64.b64encode(data_bytes).decode("utf-8"),
