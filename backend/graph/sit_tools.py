@@ -9,6 +9,11 @@ from pathlib import Path
 from folium.plugins import DualMap
 from folium import Element
 
+
+# questi sono da cambaire perché usavano il session manager, get_session_key,
+# e il vecchio sistema di ingestion degli artifacts: in realtà ora possiamo semplificare tutto,
+# poi lo facciamo
+
 # Import the session manager
 from backend.graph.dataset_tools import session_manager, get_session_key
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import base64
+from datetime import date, datetime
 from typing import Dict
 from typing_extensions import Annotated
 
@@ -13,6 +14,13 @@ from langchain.tools import tool, ToolRuntime
 from langgraph.types import Command
 
 import modal
+
+
+def json_serializer(obj):
+    """Custom JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
 
 from backend.opendata_api.helpers import is_dataset_too_heavy, get_dataset_bytes  # change heavy detection this to be more reliable
 from backend.opendata_api.init_client import client
@@ -107,7 +115,7 @@ async def load_dataset_tool(
     # write into modal workspace
     session_id = str(get_thread_id())
     write_dataset_bytes = _get_modal_function("write_dataset_bytes")    
-    summary = write_dataset_bytes.remote(
+    write_dataset_bytes.remote(
         dataset_id=dataset_id,
         data_b64=base64.b64encode(data_bytes).decode("utf-8"),
         session_id=session_id,
@@ -116,7 +124,7 @@ async def load_dataset_tool(
     )    
 
     return Command(update={"messages": [ToolMessage(
-        content=json.dumps(summary, ensure_ascii=False),
+        content=f"Dataset '{dataset_id}' loaded successfully at /workspace/datasets/{dataset_id}.parquet",
         tool_call_id=runtime.tool_call_id
     )]})
 
