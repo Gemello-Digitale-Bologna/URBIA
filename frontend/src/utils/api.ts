@@ -1,11 +1,11 @@
 /**
  * API client utilities for backend communication.
- * All requests use relative paths; Vite proxy forwards /api to backend.
+ * Uses VITE_API_URL environment variable in production, falls back to /api for local dev.
  */
 
 import type { Thread, Message, ThreadConfig } from '@/types/api';
 
-const BASE_URL = '/api';
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 // ===== Threads =====
 
