@@ -182,15 +182,8 @@ async def load_dataset_tool(
 )   
 def list_loaded_datasets_tool(runtime: ToolRuntime) -> Command:
     """
-    Lists datasets in two categories:
-    1. Available in S3 input bucket (ready to load)
-    2. Already loaded in current Modal workspace
-
-    **But:** we shadow this division for the model, in order to simplify things for him.
-    He will only see the full list (S3 + workspace) as a single list with no distinctions.
-    Then in the load_dataset tool, we will automatically load the dataset from S3 if available there, otherwise we will download it from the API.
+    Lists datasets already loaded in the current workspace.
     """
-    import boto3
     
     thread_id = get_thread_id()
     if not thread_id:
@@ -200,36 +193,11 @@ def list_loaded_datasets_tool(runtime: ToolRuntime) -> Command:
         )]})
     
     result = []
-    
-    # 1. List available datasets from S3 input bucket
-    try:
-        s3 = boto3.client("s3")
-        bucket = os.getenv("S3_BUCKET")
-        if bucket:
-            response = s3.list_objects_v2(Bucket=bucket, Prefix="input/datasets/")
-            if "Contents" in response:
-                for obj in response["Contents"]:
-                    key = obj["Key"]
-                    # Skip the prefix itself if it's listed as an object
-                    if key.endswith("/"):
-                        continue
-                    # Extract dataset_id from key (input/datasets/DATASET_ID.parquet)
-                    filename = key.split("/")[-1]
-                    dataset_id = filename.rsplit(".", 1)[0]  # Remove extension
-                    result.append(dataset_id)
-    except Exception as e:
-        return Command(update={"messages": [ToolMessage(
-            content=f"Error: Failed to list S3 datasets: {str(e)}",
-            tool_call_id=runtime.tool_call_id
-        )]})
-    
-    # 2. List datasets already loaded in Modal workspace
     try:
         session_id = str(thread_id)
         list_loaded_datasets = _get_modal_function("list_loaded_datasets")
         loaded = list_loaded_datasets.remote(session_id=session_id)
-        # Loaded datasets
-        for item in loaded:  # loaded is a dict with metadata
+        for item in loaded:
             path = item.get("path", "")
             dataset_id = path.rsplit(".", 1)[0]
             result.append(dataset_id)
