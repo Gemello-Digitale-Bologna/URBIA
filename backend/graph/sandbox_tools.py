@@ -174,17 +174,21 @@ async def load_dataset_tool(
         return Command(update={"messages": [ToolMessage(
             content=f"Error: Unexpected error loading dataset '{dataset_id}': {str(e)}",
             tool_call_id=runtime.tool_call_id
-        )]})
+        )]})    
 
 @tool(
-    name_or_callable="list_datasets",
-    description="List available datasets from S3 and datasets already loaded in the current workspace."
-)
-def list_datasets_tool(runtime: ToolRuntime) -> Command:
+    name_or_callable="list_loaded_datasets",
+    description="List datasets already loaded in the current workspace."
+)   
+def list_loaded_datasets_tool(runtime: ToolRuntime) -> Command:
     """
-    List datasets in two categories:
+    Lists datasets in two categories:
     1. Available in S3 input bucket (ready to load)
     2. Already loaded in current Modal workspace
+
+    **But:** we shadow this division for the model, in order to simplify things for him.
+    He will only see the full list (S3 + workspace) as a single list with no distinctions.
+    Then in the load_dataset tool, we will automatically load the dataset from S3 if available there, otherwise we will download it from the API.
     """
     import boto3
     
@@ -195,7 +199,7 @@ def list_datasets_tool(runtime: ToolRuntime) -> Command:
             tool_call_id=runtime.tool_call_id
         )]})
     
-    result = {"available_in_s3": [], "loaded_in_workspace": []}
+    result = []
     
     # 1. List available datasets from S3 input bucket
     try:
@@ -212,39 +216,42 @@ def list_datasets_tool(runtime: ToolRuntime) -> Command:
                     # Extract dataset_id from key (input/datasets/DATASET_ID.parquet)
                     filename = key.split("/")[-1]
                     dataset_id = filename.rsplit(".", 1)[0]  # Remove extension
-                    result["available_in_s3"].append({
-                        "dataset_id": dataset_id,
-                        "s3_key": key,
-                        "size_mb": round(obj["Size"] / (1024 * 1024), 3),
-                        "last_modified": obj["LastModified"].isoformat()
-                    })
+                    result.append(dataset_id)
     except Exception as e:
-        result["s3_error"] = f"Failed to list S3 datasets: {str(e)}"
+        return Command(update={"messages": [ToolMessage(
+            content=f"Error: Failed to list S3 datasets: {str(e)}",
+            tool_call_id=runtime.tool_call_id
+        )]})
     
     # 2. List datasets already loaded in Modal workspace
     try:
         session_id = str(thread_id)
         list_loaded_datasets = _get_modal_function("list_loaded_datasets")
         loaded = list_loaded_datasets.remote(session_id=session_id)
-        result["loaded_in_workspace"] = loaded
+        # Loaded datasets
+        for item in loaded:  # loaded is a dict with metadata
+            path = item.get("path", "")
+            dataset_id = path.rsplit(".", 1)[0]
+            result.append(dataset_id)
     except Exception as e:
-        result["workspace_error"] = f"Failed to list loaded datasets: {str(e)}"
+        return Command(update={"messages": [ToolMessage(
+            content=f"Error: Failed to list loaded datasets: {str(e)}",
+            tool_call_id=runtime.tool_call_id
+        )]})
     
-    # Add helpful note for the model
-    result["note"] = "You can load datasets from S3 into the datasets/ directory using the load_dataset() tool."
-    
+    # Return the result as a list of dataset_ids
     return Command(update={"messages": [ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=json_serializer),
+        content=json.dumps(result, ensure_ascii=False),
         tool_call_id=runtime.tool_call_id
     )]})
-
+    
 @tool(
     name_or_callable="export_dataset",
     description="Use this to export a dataset from the sandbox given its path."
 )
 def export_dataset_tool(dataset_path: Annotated[str, "The path of the dataset to export."],
                    runtime: ToolRuntime) -> Command:
-    """Use this to export a dataset from the sandbox given its path."""
+    """Exports a dataset from the sandbox to S3."""
     bucket = os.getenv("S3_BUCKET")
     if not bucket:
         return Command(update={"messages": [ToolMessage(
