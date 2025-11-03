@@ -650,7 +650,8 @@ async def list_messages(
                                 "size": artifact.size,
                                 "url": url,
                             })
-                        except Exception:
+                        except Exception as e:
+                            logging.warning(f"Failed to generate URL for artifact {artifact.id}: {e}")
                             pass  # Skip artifacts that fail URL generation
         
         message_outputs.append(MessageOut.model_validate(msg_dict))

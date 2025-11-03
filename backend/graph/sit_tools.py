@@ -3,6 +3,7 @@ import tempfile
 import hashlib
 import os
 import boto3
+from botocore.client import Config
 from typing import Optional, List
 from typing_extensions import Annotated
 from langgraph.types import Command
@@ -116,7 +117,12 @@ async def folium_ortho(
         sha256 = hashlib.sha256(html_bytes).hexdigest()
         s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
         
-        s3 = boto3.client('s3')
+        region = os.getenv('AWS_REGION', 'eu-central-1')
+        s3 = boto3.client(
+            's3',
+            region_name=region,
+            config=Config(signature_version='s3v4')
+        )
         bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
         s3.put_object(
             Bucket=bucket,
@@ -342,7 +348,12 @@ async def compare_ortofoto(
         sha256 = hashlib.sha256(html_bytes).hexdigest()
         s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
         
-        s3 = boto3.client('s3')
+        region = os.getenv('AWS_REGION', 'eu-central-1')
+        s3 = boto3.client(
+            's3',
+            region_name=region,
+            config=Config(signature_version='s3v4')
+        )
         bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
         s3.put_object(
             Bucket=bucket,
@@ -504,7 +515,12 @@ async def view_3d_model(
         sha256 = hashlib.sha256(html_bytes).hexdigest()
         s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
         
-        s3 = boto3.client('s3')
+        region = os.getenv('AWS_REGION', 'eu-central-1')
+        s3 = boto3.client(
+            's3',
+            region_name=region,
+            config=Config(signature_version='s3v4')
+        )
         bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
         s3.put_object(
             Bucket=bucket,

@@ -96,8 +96,14 @@ async def load_dataset_tool(
     """
     try:
         import boto3
+        from botocore.client import Config
 
-        s3 = boto3.client("s3")
+        region = os.getenv("AWS_REGION", "eu-central-1")
+        s3 = boto3.client(
+            "s3",
+            region_name=region,
+            config=Config(signature_version='s3v4')
+        )
         input_bucket = os.getenv("S3_BUCKET")
         if not input_bucket:
             return Command(update={"messages": [ToolMessage(

@@ -71,12 +71,18 @@ def scan_and_upload_artifacts(processed_artifacts: set, s3_bucket: str, s3_clien
 def driver_program():
     """Driver program that maintains Python state across executions."""
     import boto3
+    from botocore.client import Config
     
     globals_dict = {}  # Persistent namespace for user code
     processed_artifacts = set()  # Track processed artifacts to avoid duplicates
     
-    # Initialize S3 client
-    s3_client = boto3.client('s3')
+    # Initialize S3 client with Signature Version 4
+    region = os.getenv('AWS_REGION', 'eu-central-1')
+    s3_client = boto3.client(
+        's3',
+        region_name=region,
+        config=Config(signature_version='s3v4')
+    )
     s3_bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
 
     artifacts_dir = Path.cwd() / "artifacts"

@@ -95,9 +95,18 @@ def generate_presigned_url_from_s3_key(s3_key: str, expiry_seconds: int = 86400)
     Generate a presigned S3 URL directly from an S3 key (driver dictionary).
     Used for streaming artifacts during SSE (when driver returns raw s3_key).
     """
+    from botocore.client import Config
+    
     bucket = os.getenv("S3_BUCKET", "lg-urban-prod")
-    region = os.getenv("AWS_REGION")
-    s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
+    region = os.getenv("AWS_REGION", "eu-central-1")  # Default region
+    
+    # Configure boto3 to use Signature Version 4
+    s3 = boto3.client(
+        "s3",
+        region_name=region,
+        config=Config(signature_version='s3v4')
+    )
+    
     return s3.generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": s3_key},

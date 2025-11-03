@@ -83,7 +83,15 @@ def export_dataset(
 
         # Datasets exported under a separate prefix
         s3_key = f"output/datasets/{sha256[:2]}/{sha256[2:4]}/{sha256}"
-        boto3.client("s3").put_object(
+        
+        from botocore.client import Config
+        region = os.getenv("AWS_REGION", "eu-central-1")
+        s3_client = boto3.client(
+            "s3",
+            region_name=region,
+            config=Config(signature_version='s3v4')
+        )
+        s3_client.put_object(
             Bucket=bucket,
             Key=s3_key,
             Body=data,

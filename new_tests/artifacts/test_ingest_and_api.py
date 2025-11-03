@@ -19,8 +19,11 @@ The tunnel will start automatically and stay running for subsequent test runs!
 
 import os
 import uuid
+import hashlib
 import pytest
 import pytest_asyncio
+import boto3
+from botocore.client import Config
 from httpx import AsyncClient
 
 from backend.main import app
@@ -93,6 +96,7 @@ async def test_ingest_artifact_and_head_metadata():
 @pytest.mark.asyncio
 @pytest.mark.skipif(not _have_real_rds_and_s3(), reason="RDS/S3 env not configured")
 async def test_download_redirects_to_s3_presigned_url():
+    """Test that download endpoint generates a redirect with a presigned URL."""
     async with ASYNC_SESSION_MAKER() as session:
         # Create a thread first (required for foreign key)
         thread_id = uuid.uuid4()
@@ -125,3 +129,70 @@ async def test_download_redirects_to_s3_presigned_url():
         bucket = os.getenv("S3_BUCKET", "")
         if bucket:
             assert bucket in loc
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _have_real_rds_and_s3(), reason="RDS/S3 env not configured")
+async def test_end_to_end_upload_and_download_from_s3():
+    """
+    End-to-end test: Upload a real file to S3, create artifact metadata, 
+    then download it via the API to verify presigned URL actually works.
+    
+    This test catches AWS signature version issues that the redirect-only test misses.
+    """
+    # Create test content
+    test_content = b"Test artifact content for signature verification"
+    sha256 = hashlib.sha256(test_content).hexdigest()
+    s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
+    
+    # Upload to S3 with proper signature version
+    bucket = os.getenv("S3_BUCKET")
+    region = os.getenv("AWS_REGION", "eu-central-1")
+    s3_client = boto3.client(
+        "s3",
+        region_name=region,
+        config=Config(signature_version='s3v4')
+    )
+    
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=s3_key,
+        Body=test_content,
+        ContentType="text/plain"
+    )
+    
+    try:
+        # Create artifact metadata in database
+        async with ASYNC_SESSION_MAKER() as session:
+            thread_id = uuid.uuid4()
+            thread = Thread(id=thread_id, user_id="test-user")
+            session.add(thread)
+            await session.commit()
+            
+            desc = await ingest_artifact_metadata(
+                session=session,
+                thread_id=thread_id,
+                s3_key=s3_key,
+                sha256=sha256,
+                filename="test_file.txt",
+                mime="text/plain",
+                size=len(test_content),
+                session_id="e2e-test-session",
+                tool_call_id="e2e-test-tool",
+            )
+            art_id = desc["id"]
+        
+        # Download via API (follow redirects to actually fetch from S3)
+        async with AsyncClient(app=app, base_url="http://test", follow_redirects=True) as client:
+            r = await client.get(f"/api/artifacts/{art_id}")
+            assert r.status_code == 200, f"Download failed with status {r.status_code}"
+            assert r.content == test_content, "Downloaded content doesn't match uploaded content"
+            
+        print(f"✅ Successfully uploaded and downloaded artifact with SHA256: {sha256[:16]}...")
+        
+    finally:
+        # Cleanup: delete test object from S3
+        try:
+            s3_client.delete_object(Bucket=bucket, Key=s3_key)
+        except Exception as e:
+            print(f"Warning: Failed to cleanup S3 object: {e}")
