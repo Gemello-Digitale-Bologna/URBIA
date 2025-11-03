@@ -7,15 +7,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 
-# driver runs inside sandbox, so it has access to the workspace
-ARTIFACTS_DIR = Path("/workspace/artifacts")
-
 def scan_and_upload_artifacts(processed_artifacts: set, s3_bucket: str, s3_client):
     """Scan workspace for new artifacts and upload to S3."""
     artifacts = []
 
     # we cannot input these as parameters since the driver is a subprocess in sandbox
-    artifacts_dir = ARTIFACTS_DIR
+    artifacts_dir = Path.cwd() / "artifacts" # Relative to current working dir (/workspace/sessions/{session_id}/)
     
     if not artifacts_dir.exists():
         return artifacts
@@ -82,8 +79,9 @@ def driver_program():
     s3_client = boto3.client('s3')
     s3_bucket = os.getenv('S3_BUCKET', 'lg-urban-prod')
 
-    if not ARTIFACTS_DIR.exists():
-        ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    artifacts_dir = Path.cwd() / "artifacts"
+    if not artifacts_dir.exists():
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     # Ensure unbuffered output
     try:
