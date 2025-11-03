@@ -8,6 +8,8 @@ import type { SSEEvent } from '@/types/api';
 
 import type { Artifact } from '@/types/api';
 
+const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
 interface UseSSEOptions {
   onToken?: (content: string) => void;
   onThinking?: (content: string) => void;
@@ -46,7 +48,7 @@ export function useSSE(options: UseSSEOptions) {
 
       try {
         // POST message with fetch to initiate SSE stream
-        const res = await fetch(`/api/threads/${threadId}/messages`, {
+        const res = await fetch(`${BASE_URL}/threads/${threadId}/messages`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
