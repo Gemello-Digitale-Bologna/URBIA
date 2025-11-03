@@ -19,6 +19,10 @@ docker
 tavily-python
 cryptography
 
+# AWS
+boto3
+s3fs
+
 # ===== Data / analytics =====
 googlemaps
 geopandas
@@ -26,15 +30,15 @@ pyogrio
 shapely
 pyproj
 rtree
-pandas>=2.2,<3
-numpy==1.26.4
-pyarrow>=16,<21
-fastparquet>=2024.5
+pandas
+numpy
+pyarrow
+fastparquet
 folium
-scikit-learn>=1.4
-scipy>=1.12
-matplotlib>=3.8
-seaborn>=0.13
-plotly>=5.22
-statsmodels>=0.14
+scikit-learn
+scipy
+matplotlib
+seaborn
+plotly
+statsmodels
 pymupdf
