@@ -973,25 +973,29 @@ async def post_message_stream(
                             from backend.artifacts.storage import generate_presigned_url_from_s3_key
                             from backend.artifacts.ingest import ingest_artifact_metadata
                             
+                            # Save artifacts to DB immediately with separate session (commit before SSE send)
+                            async with ASYNC_SESSION_MAKER() as artifact_sess:
+                                for art in artifacts:
+                                    if 's3_key' in art and tool_call_id:
+                                        try:
+                                            await ingest_artifact_metadata(
+                                                session=artifact_sess,
+                                                thread_id=t.id,
+                                                s3_key=art['s3_key'],
+                                                sha256=art.get('sha256', ''),
+                                                filename=art.get('name', 'unknown'),
+                                                mime=art.get('mime', 'application/octet-stream'),
+                                                size=art.get('size', 0),
+                                                tool_call_id=tool_call_id
+                                            )
+                                        except Exception as e:
+                                            logging.warning(f"Failed to ingest artifact {art.get('name')}: {e}")
+                                # Commit immediately so artifacts are available for frontend refetch
+                                await artifact_sess.commit()
+                            
+                            # Now prepare artifacts for SSE with presigned URLs
                             converted_artifacts = []
                             for art in artifacts:
-                                # Save artifact metadata to database for persistence
-                                if 's3_key' in art and tool_call_id:
-                                    try:
-                                        await ingest_artifact_metadata(
-                                            session=write_sess,
-                                            thread_id=t.id,
-                                            s3_key=art['s3_key'],
-                                            sha256=art.get('sha256', ''),
-                                            filename=art.get('name', 'unknown'),
-                                            mime=art.get('mime', 'application/octet-stream'),
-                                            size=art.get('size', 0),
-                                            tool_call_id=tool_call_id
-                                        )
-                                    except Exception as e:
-                                        logging.warning(f"Failed to ingest artifact {art.get('name')}: {e}")
-                                
-                                # Prepare artifact for SSE with presigned URL
                                 converted = {
                                     'id': art.get('sha256', '')[:16],  # Use first 16 chars of SHA as temp ID
                                     'name': art.get('name', 'unknown'),

@@ -149,7 +149,7 @@ export function MessageInput() {
       
       // Smoothly update the assistant message with artifacts from DB
       if (currentThreadId && messageId) {
-        // Short delay to ensure backend has persisted everything
+        // Longer delay to ensure backend has committed artifacts to DB
         setTimeout(async () => {
           try {
             const messages = await listMessages(currentThreadId);
@@ -158,13 +158,28 @@ export function MessageInput() {
             if (assistantMsg && assistantMsg.artifacts && assistantMsg.artifacts.length > 0) {
               // Update only this specific message with artifacts
               updateMessage(messageId, { artifacts: assistantMsg.artifacts });
+              // Clear artifact bubbles ONLY after successfully loading from DB
+              clearArtifactBubbles(currentThreadId);
+            } else {
+              console.log('Artifacts not in DB yet, keeping bubbles visible for 2 more seconds');
+              // Retry once more after additional delay
+              setTimeout(async () => {
+                try {
+                  const retryMessages = await listMessages(currentThreadId);
+                  const retryMsg = retryMessages.find(m => m.id === messageId);
+                  if (retryMsg && retryMsg.artifacts && retryMsg.artifacts.length > 0) {
+                    updateMessage(messageId, { artifacts: retryMsg.artifacts });
+                    clearArtifactBubbles(currentThreadId);
+                  }
+                } catch (err) {
+                  console.error('Retry failed to load artifacts:', err);
+                }
+              }, 2000);
             }
-            // Clear artifact bubbles now that artifacts are properly saved to DB
-            clearArtifactBubbles(currentThreadId);
           } catch (err) {
             console.error('Failed to update message with artifacts:', err);
           }
-        }, 100); // Minimal delay for DB to persist
+        }, 500); // Increased delay for DB commit
       }
     },
     onError: (error) => {
