@@ -7,7 +7,7 @@ from langgraph.types import Command
     name_or_callable="assign_to_report_writer",
     description="Use this to assign the task to the report writer when analysis is complete."
 )
-def assign_to_report_writer(
+def assign_to_report_writer_tool(
     reason: Annotated[str, "Brief reason why analysis is complete and report should be written"],
     runtime: ToolRuntime
 ) -> Command:
@@ -30,7 +30,7 @@ def assign_to_report_writer(
 from langgraph.types import interrupt
 
 @tool
-def write_report(
+def write_report_tool(
     report_title: Annotated[str, "The title of the report"],
     report_content: Annotated[str, "The content of the report"],
     runtime: ToolRuntime
@@ -67,3 +67,23 @@ def write_report(
 
 # probably should make a modify_report() tool that can be used to modify an existing report after it was approved. But maybe that can 
 # be frontend only.
+
+
+@tool
+def get_sources_tool(
+    runtime: ToolRuntime
+) -> Command:
+    """
+    Get the sources used in the analysis.
+    """
+    state = runtime.state
+
+    sources = state["sources"]
+
+    sources_str = "\n".join([f"- {source['desc']}: {source['url']}" for source in sources.values()])
+
+    return Command(
+        update = {
+            "messages" : [ToolMessage(content=f"Sources: {sources_str}", tool_call_id=runtime.tool_call_id)],
+        }
+    )

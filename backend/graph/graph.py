@@ -5,13 +5,15 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langchain_core.messages import SystemMessage, HumanMessage, RemoveMessage
+from langchain_core.messages import HumanMessage, RemoveMessage
 from pydantic import SecretStr
 from dotenv import load_dotenv
 import os
 
 from backend.graph.prompts.summarizer import summarizer_prompt
 from backend.graph.prompts.analyst import PROMPT
+from backend.graph.tools.report_tools import assign_to_report_writer_tool, write_report_tool # , get_sources_tool
+from backend.graph.prompts.report import report_prompt
 from backend.graph.tools.sandbox_tools import execute_code_tool, list_loaded_datasets_tool, load_dataset_tool, export_dataset_tool, terminate_session_executor
 from backend.graph.tools.api_tools import (
     list_catalog_tool,
@@ -64,6 +66,8 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         checkpointer: Reused checkpointer instance from app startup.
         user_api_keys: Dict with 'openai_key' and 'anthropic_key' for user-provided API keys.
     """
+
+    # ======= ANALYST AGENT =======
     from backend.config import DEFAULT_MODEL, DEFAULT_TEMPERATURE, CONTEXT_WINDOW
     # Use config or fall back to env defaults
     model_name = model_name or DEFAULT_MODEL
@@ -127,6 +131,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         load_dataset_tool,
         list_loaded_datasets_tool,
         export_dataset_tool,
+        execute_code_tool,
     ]
 
     api_tools = [
@@ -138,11 +143,16 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         get_dataset_time_info_tool,
     ]
 
+    report_tools = [
+        assign_to_report_writer_tool,
+    ]
+
     tools = [
         *api_tools,
         *dataset_tools,
         *sit_tools,
-    ] + [execute_code_tool]
+        *report_tools,
+    ]
     
     # main agent
     agent = create_agent(
@@ -153,7 +163,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         state_schema=MyState,
     )
 
-    # summarization agent
+    # ======= SUMMARIZER AGENT =======
     # Use same API key configuration as main LLM for gpt-4o-mini
     summarizer_kwargs = {"model": "gpt-4.1", "temperature": 0.0}
     if user_api_keys and user_api_keys.get('openai_key'):
@@ -168,6 +178,24 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         name="agent_summarizer",
         state_schema=MyState,
     )
+
+    # ======= REPORT WRITER AGENT =======
+    # use claude 4.5 Haiku for report writer
+    report_writer_kwargs = {"model": "claude-haiku-4-5"}
+    if user_api_keys and user_api_keys.get('anthropic_key'):
+        report_writer_kwargs['api_key'] = SecretStr(user_api_keys['anthropic_key'])
+    elif os.getenv('ANTHROPIC_API_KEY'):
+        report_writer_kwargs['api_key'] = SecretStr(os.getenv('ANTHROPIC_API_KEY'))
+    
+    agent_report_writer = create_agent(
+        model=ChatAnthropic(**report_writer_kwargs),
+        tools=[write_report_tool], #, get_sources_tool],
+        system_prompt=report_prompt,
+        name="agent_report_writer",
+        state_schema=MyState,
+    )
+
+    # ======= GRAPH =======
 
     # summarization node
     async def summarize_conversation(state: MyState,
