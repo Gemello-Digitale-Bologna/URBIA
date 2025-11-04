@@ -12,8 +12,8 @@ import os
 
 from backend.graph.summarizer_prompt import summarizer_prompt
 from backend.graph.prompt import PROMPT
-from backend.graph.sandbox_tools import execute_code_tool, list_loaded_datasets_tool, load_dataset_tool, export_dataset_tool, terminate_session_executor
-from backend.graph.api_tools import (
+from backend.graph.tools.sandbox_tools import execute_code_tool, list_loaded_datasets_tool, load_dataset_tool, export_dataset_tool, terminate_session_executor
+from backend.graph.tools.api_tools import (
     list_catalog_tool,
     preview_dataset_tool,
     get_dataset_description_tool,
@@ -21,12 +21,11 @@ from backend.graph.api_tools import (
     is_geo_dataset_tool,
     get_dataset_time_info_tool,
 )
-
-'''from backend.graph.sit_tools import (
+from backend.graph.tools.sit_tools import (
     folium_ortho,
     compare_ortofoto,
     view_3d_model,
-)'''
+)
 from backend.graph.state import MyState
 
 
@@ -118,11 +117,11 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         prompt_text += f"\n\n{system_prompt}"
     system_message = prompt_text.strip()
 
-    '''sit_tools = [
+    sit_tools = [
         folium_ortho,
         compare_ortofoto,
         view_3d_model,
-    ]'''
+    ]
 
     dataset_tools = [
         load_dataset_tool,
@@ -142,7 +141,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
     tools = [
         *api_tools,
         *dataset_tools,
-        # *sit_tools,
+        *sit_tools,
     ] + [execute_code_tool]
     
     # main agent

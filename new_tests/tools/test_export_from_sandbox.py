@@ -174,7 +174,7 @@ def test_export_dataset_tool_integration():
     if not (os.getenv("MODAL_TOKEN_ID") and os.getenv("MODAL_TOKEN_SECRET")):
         pytest.skip("Modal tokens not configured; skipping real Modal integration test")
     
-    from backend.graph.sandbox_tools import export_dataset_tool, get_or_create_executor, terminate_session_executor
+    from backend.graph.tools.sandbox_tools import export_dataset_tool, get_or_create_executor, terminate_session_executor
     from backend.graph.context import set_thread_id
     from unittest.mock import Mock
     import json

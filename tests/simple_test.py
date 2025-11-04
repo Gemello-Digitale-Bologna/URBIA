@@ -170,7 +170,7 @@ class TestToolIntegration:
     
     def test_import_opendata_tools(self):
         """Test that we can import OpenData API tools."""
-        from backend.graph.api_tools import list_catalog_tool, preview_dataset_tool
+        from backend.graph.tools.api_tools import list_catalog_tool, preview_dataset_tool
         assert list_catalog_tool is not None
         assert preview_dataset_tool is not None
 
