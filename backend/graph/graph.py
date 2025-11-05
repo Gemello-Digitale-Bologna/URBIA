@@ -236,19 +236,40 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
                 goto="analyst_agent"  # go back to the analyst agent to answer the question
             )   
 
-    # -------ROUTING FUNCTION-------
+    # -------ROUTING FUNCTIONS-------
     def get_next_node(state: MyState):
         """
-        Routes to next node based on the `write_report` state flag: if it's True, goes to report writer, otherwise ends flow.
+        Used in analyst_agent_node to route to next node based on the report status flag.
+        It decides whether to go to report writer or end flow:
+        **If it is none -> ends flow.** 
+        **If it is not_selected -> goes to report writer.**
+        
+        This may seem like overkill at first, but actually it allows us not to interrupt the flow at every data analyst answer.
+        Only if the data analyst thinks it should write a report, it sets the flag to not_selected and goes to report writer.
+        
         NOTE: this workaround was needed because nesting commands is bad behaviour - so we make a tool update a flag and then check it here.
         Basically an alternative to a conditional edge. 
         """
-        print(f"***routing function in get_next_node: write report flag is {state['write_report']}")
-        if state["write_report"] == True:
+        print(f"***routing function in get_next_node: report status is {state['report_status']}")
+        if state["report_status"] == "assigned":
             print("***routing to report writer in get_next_node")
             return "report_writer"
+        elif state["report_status"] == "none":
+            print("***routing to end flow in get_next_node")
+            return "__end__"
+        else:
+            raise ValueError(f"Invalid report status: {state['report_status']}")
     
-        return "__end__"
+    def route_from_report_status(report_status: Literal["pending", "rejected"]):
+        """
+        Used in write_report_node to route to next node based on the report status. The report status is updated by the write_report_tool.
+        **If it's pending -> goes to human approval.** (write_report_tool interuupted and user confirmed -> pending)
+        **If it's rejected -> ends flow.** (write_report_tool interrupted and user rejected -> rejected)
+        """
+        if report_status == "pending":
+            return "human_approval"
+        elif report_status == "rejected":
+            return "__end__"
 
 
     # -------ANALYST AGENT NODE-------
@@ -296,7 +317,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         input_tokens = meta["input_tokens"] if meta else 0
 
         # routing happens here
-        goto = get_next_node(result)  # CRUCIAL: we were invoking on state -> we need to invoke on the result! that contains the new flag value
+        goto = get_next_node(result)  # CRUCIAL: we were calling this on state -> we need to invoke on the result! that contains the new flag value
 
         # update the token count and add message
         return Command(
@@ -309,7 +330,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
 
     # -------REPORT WRITER AGENT NODE-------
     async def write_report_node(state: MyState,
-    ) -> Command[Literal["human_approval"]]:   # this can actually go to human approval or end, but the end part is done by the write_report_tool. So we only put "human_approval" in Literal.
+    ) -> Command[Literal["human_approval", "__end__"]]:   # this can actually go to human approval or end, but the end part is done by the write_report_tool. So we only put "human_approval" in Literal.
         """
         Invokes the report writer agent.
 
@@ -325,28 +346,31 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
 
         print("***arrived to report writer")
         # If there are edit instructions, add them to the messages and invoke the agent with the new messages
-        if state["edit_instructions"] != "": # edits: revise existing report
+        if state["report_status"] == "pending": # edits: revise existing report
             print("***revising existing report in write_report_node")
             msg = f"Revise the report based on the following instructions: {state['edit_instructions']}"
             messages = state["messages"] + [HumanMessage(content=msg)]
-        else: # no edits: write a new report
+        elif state["report_status"] == "not_selected": # we got here so the user wants report to be written, first time -> no edits: write a new report
             print("***writing new report in write_report_node")
             msg = "Write a new report based on the analysis performed and the sources used."
             messages = state["messages"] + [HumanMessage(content=msg)]
 
         # invoke on full state but use messages with new sys msg
         print("***invoking report writer agent in write_report_node")
-        result = await agent_report_writer.ainvoke({**state, "messages": messages})  # here the agent uses the write_report_tool, which has its own interrupt for human approval
+        result = await agent_report_writer.ainvoke({**state, "messages": messages})  # here the agent uses the write_report_tool: reort status can be either rejected or pending now
         last_msg = result["messages"][-1]
+
+        goto = route_from_report_status(result["report_status"])  # if report = pending -> human approval, if report = rejected -> end flow
 
         return Command(
             update = {  # propagate possible updates
                 "messages": [last_msg],
                 "reports": result.get("reports", {}),  # Tool updated this
                 "last_report_title": result.get("last_report_title"),  # Tool updated this
+                "report_status": result["report_status"],  # Tool updated this - update here not really needed (goto uses it) but good to have for safety
                 "edit_instructions": ""  # clear edit instructions (if there were any, report writer already used them)
             },
-            goto="human_approval"
+            goto=goto  # can either be human approval (status="pending") or end flow (status="rejected") 
         )
 
     # -------HUMAN APPROVAL NODE-------
@@ -360,21 +384,36 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
             - (3) **route based on user input**: if the user approves, end flow; if the user requests edits, go back to report writer node for edits.
         """
         # Safety check
-        if not state["last_report_title"] or state["last_report_title"] not in state["reports"]:
-            raise ValueError("No report has been written yet!")  # if we got to human approval node, it means the report has been written, so we raise an error
+        if state["report_status"] == "pending":
+            # pending means that it should have been written by now
+            if not state["last_report_title"] or state["last_report_title"] not in state["reports"]:
+                raise ValueError("No report has been written yet!")  # if we got to human approval node, it means the report has been written, so we raise an error
 
-        # Again, we can simplify the message below, and show a nice message in frontend for the user. This message below can be only for backend
+        # This message below is only for backend, can be simplified - it's not shown in frontend
         human_input = interrupt({
             "question": "The report has been generated. If you approve the report, input 'yes' - once approved, you can manually edit it. If instead you want the model to edit it, input your desired changes.",
             "report": state["reports"][state["last_report_title"]]
         })
         print(f"***human input in human_approval_node: {human_input}")
         if human_input["type"] == "accept":
-            return Command(goto="__end__", update={"write_report": False})  # accepted: therefore, end flow   
+            return Command(
+                goto="__end__", 
+                update={"report_status": "accepted"}
+            )  # accepted: therefore, end flow   
+
         elif human_input["type"] == "edit":
-            return Command(goto="report_writer", update={"edit_instructions": human_input["edit_instructions"]})
+            return Command(
+                goto="report_writer", 
+                update={
+                    "edit_instructions": human_input["edit_instructions"], 
+                    "report_status": "pending"
+                }
+            )  # edit: goes back to report writer node for edits
+
         else:
-            raise ValueError(f"Invalid response type: {human_input['type']}")
+            raise ValueError(
+                f"Invalid response type: {human_input['type']}"
+            )
 
     # ======= GRAPH  BUILDING =======               
 

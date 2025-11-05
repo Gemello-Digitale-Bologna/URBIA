@@ -883,7 +883,7 @@ async def post_message_stream(
                     # Stream token chunks from the LLM (but not from summarizer or its sub-calls)
                     if event_type == "on_chat_model_stream":
                         # Skip if we're inside summarization context (agent called by summarizer)
-                        if checkpoint_ns.startswith("summarize_conversation:"):
+                        if checkpoint_ns.startswith("summarize_conversation:") or checkpoint_ns.startswith("report_writer:"):
                             continue
                         
                         chunk = event.get("data", {}).get("chunk")

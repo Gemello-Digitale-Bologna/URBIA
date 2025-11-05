@@ -22,7 +22,7 @@ def assign_to_report_writer_tool(
                 content=f"Analysis complete. {reason}. Assigning to report writer.", 
                 tool_call_id=runtime.tool_call_id
             )],
-            "write_report" : True
+            "report_status" : "assigned"   # first assignment: assigned to report writer
         }
     )
 
@@ -42,7 +42,8 @@ def write_report_tool(
     state = runtime.state   
     print("***writing report in write_report_tool")
     # interrupt only if the writer is not editing an existing report
-    if state["edit_instructions"] == "":
+    if state["report_status"] == "assigned":  # means this is the first time the report is being written
+        print(f"***report status is 'assigned' in write_report_tool")
 
         print("***asking for report writing approval in write_report_tool")
 
@@ -51,21 +52,29 @@ def write_report_tool(
 
         if response["type"] == "accept":
             print("***accepted write report in write_report_tool")
-            pass  # accepted write report: therefore, continue flow
+            pass  # accepted write report: therefore, continue flow (will update status to pending at the end of the tool)
         elif response["type"] == "reject":
             print("***rejected write report in write_report_tool")
-            return Command(updade={"messages": [ToolMessage(content="Report writing rejected by the user.", tool_call_id=runtime.tool_call_id)]}, goto="__end__")  # rejected write report: therefore, end flow
+            return Command(update={
+                "messages": [
+                    ToolMessage(
+                        content="Report writing rejected by the user.", 
+                        tool_call_id=runtime.tool_call_id
+                    )], 
+                    "report_status" : "rejected"  # rejected write report
+                })  
         else:
             raise ValueError(f"Invalid response type: {response['type']}")
 
     report_dict = {report_title: report_content}  # show this to the user in frontend in a nice way (like sidebar with the full report in markdown format)
 
-    return Command(  # accepted write report: therefore, continue flow
+    return Command(  
         update = {
             "messages" : [ToolMessage(content="Report written successfully.", tool_call_id=runtime.tool_call_id)],
             "reports" : report_dict,
             "last_report_title" : report_title,
-            "edit_instructions" : ""  # clear if there were any 
+            "edit_instructions" : "",  # clear if there were any 
+            "report_status" : "pending"  # pending - can be edited
         }
     )
 

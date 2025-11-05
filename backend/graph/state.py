@@ -1,9 +1,5 @@
 from langchain.agents import AgentState
-from typing import Annotated
-
-# we add reducers not mainly for conurrency of update, but more to define rules for updates
-# we want string updates for summary (if a summary exists, we want to extend it) so no reducers needed
-# but we want to count tokens AND reset to 0 after each summary update
+from typing import Annotated, Literal
 
 def update_token_count(token_count: int | None = None, token_used: int | None = None) -> int:
     """
@@ -61,7 +57,10 @@ def list_replace_str(
     right: list[str] | None
 ) -> list[str]:
     """Replace list of strings entirely instead of concatenating. Used for code logs chunks"""
-    return right if right is not None else (left if left is not None else [])
+    if left is None:
+        left = []
+
+    return right
 
 
 def str_replace(
@@ -71,32 +70,28 @@ def str_replace(
     """Update a string just by replacing it. Reducer needed to initialize when None"""
     if left is None:
         left = ""
-    if right is None:
-        right = ""
+
     return right
 
-def bool_replace(
-    left: bool | None,
-    right: bool | None
-) -> bool:
-    """Update a boolean just by replacing it. Reducer needed to initialize when None"""
+def status_replace(
+    left: Literal["none", "assigned", "pending", "rejected", "accepted"] | None,
+    right: Literal["none", "assigned", "pending", "rejected", "accepted"] | None
+) -> Literal["none", "assigned", "pending", "rejected", "accepted"]: # "none" is the initial state
+    """Update the report status just by replacing strings. Reducer needed to initialize when None"""
     if left is None:
-        left = False
-    if right is None:
-        right = False
-    
-    return right
+        left = "none"
 
+    return right
 
 class MyState(AgentState):
     # summary and token count features (core)
-    summary : str   # No reducer - just replace
+    summary : Annotated[str, str_replace]
     token_count : Annotated[int, update_token_count]
-    # write report features 
+    # report features 
     sources : Annotated[list[str], list_add] # list of dataset ids
     reports: Annotated[dict[str, str], merge_dicts]  # key is the title, value is the content 
-    write_report : Annotated[bool, bool_replace]
-    last_report_title : Annotated[str, str_replace]
-    edit_instructions : Annotated[str, str_replace]
+    report_status : Annotated[Literal["none", "assigned", "pending", "rejected", "accepted"], status_replace]
+    last_report_title : Annotated[str, str_replace]  # title of the last report written
+    edit_instructions : Annotated[str, str_replace]  # instructions for the report writer to edit the report
     code_logs: Annotated[list[dict[str, str]], list_add]  # list of dicts (we need chronological order!), each dicts is input and output of a code block (out can be stdout or stderr or both)
     code_logs_chunks: Annotated[list[str], list_replace_str]  # list of strings, each string is a chunk of already ordered code logs - we first stringify code_logs correclty, then separate it in chunks (see get_code_logs_tool in report_tools.py)
