@@ -54,7 +54,7 @@ def write_report_tool(
             pass  # accepted write report: therefore, continue flow
         elif response["type"] == "reject":
             print("***rejected write report in write_report_tool")
-            return Command(goto="__end__")  # rejected write report: therefore, end flow
+            return Command(updade={"messages": [ToolMessage(content="Report writing rejected by the user.", tool_call_id=runtime.tool_call_id)]}, goto="__end__")  # rejected write report: therefore, end flow
         else:
             raise ValueError(f"Invalid response type: {response['type']}")
 
