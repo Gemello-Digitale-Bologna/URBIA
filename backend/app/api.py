@@ -837,6 +837,7 @@ async def post_message_stream(
                 current_step_content = ""  # Accumulate ALL content in current step
                 current_step_has_tools = False
                 current_langgraph_step = None
+                current_node = None  # Track current node to skip output from report_writer
                 # Track all streamed content for database storage (only final response)
                 all_streamed_content = ""
                 
@@ -865,7 +866,8 @@ async def post_message_stream(
                     
                     # Detect step change - decide if previous step was thinking or final response
                     if langgraph_step != current_langgraph_step and current_langgraph_step is not None:
-                        if current_step_content:
+                        # Only output if previous step was NOT from report_writer or human_approval
+                        if current_step_content and current_node not in ["report_writer", "human_approval"]:
                             if current_step_has_tools:
                                 # Previous step had tool calls - it was thinking (Claude pattern)
                                 yield f"data: {json.dumps({'type': 'thinking', 'content': current_step_content})}\n\n"
@@ -879,11 +881,12 @@ async def post_message_stream(
                         current_step_has_tools = False
                     
                     current_langgraph_step = langgraph_step
+                    current_node = node  # Track which node we're in
                     
                     # Stream token chunks from the LLM (but not from summarizer or its sub-calls)
                     if event_type == "on_chat_model_stream":
-                        # Skip if we're inside summarization context (agent called by summarizer)
-                        if checkpoint_ns.startswith("summarize_conversation:") or checkpoint_ns.startswith("report_writer:"):
+                        # Skip if we're inside summarization context (agent called by summarizer) or if we're in the report writer node
+                        if checkpoint_ns.startswith("summarize_conversation:") or node == "report_writer":
                             continue
                         
                         chunk = event.get("data", {}).get("chunk")
@@ -1049,7 +1052,8 @@ async def post_message_stream(
                             assistant_content = output.content
                 
                 # Handle the last step's content after the loop ends
-                if current_step_content:
+                # Only output if last step was NOT from report_writer or human_approval
+                if current_step_content and current_node not in ["report_writer", "human_approval"]:
                     if current_step_has_tools:
                         # Last step had tool calls - it was thinking
                         yield f"data: {json.dumps({'type': 'thinking', 'content': current_step_content})}\n\n"
@@ -1181,6 +1185,7 @@ async def resume_thread(
                 current_step_content = ""
                 current_step_has_tools = False
                 current_langgraph_step = None
+                current_node = None  # Track current node to skip output from report_writer
                 all_streamed_content = ""
                 
                 # Resume with Command(resume=resume_value) using SAME graph and config
@@ -1207,7 +1212,8 @@ async def resume_thread(
                     
                     # Detect step change - same logic as POST /messages
                     if langgraph_step != current_langgraph_step and current_langgraph_step is not None:
-                        if current_step_content:
+                        # Only output if previous step was NOT from report_writer or human_approval
+                        if current_step_content and current_node not in ["report_writer", "human_approval"]:
                             if current_step_has_tools:
                                 yield f"data: {json.dumps({'type': 'thinking', 'content': current_step_content})}\n\n"
                             else:
@@ -1217,10 +1223,12 @@ async def resume_thread(
                         current_step_has_tools = False
                     
                     current_langgraph_step = langgraph_step
+                    current_node = node  # Track which node we're in
                     
                     # Stream token chunks (same as POST /messages)
                     if event_type == "on_chat_model_stream":
-                        if checkpoint_ns.startswith("summarize_conversation:"):
+                        # Skip if in summarization or report writer nodes
+                        if checkpoint_ns.startswith("summarize_conversation:") or node == "report_writer":
                             continue
                         
                         chunk = event.get("data", {}).get("chunk")
@@ -1319,7 +1327,8 @@ async def resume_thread(
                         yield f"data: {json.dumps(event_data)}\n\n"
                 
                 # Handle last step's content
-                if current_step_content:
+                # Only output if last step was NOT from report_writer or human_approval
+                if current_step_content and current_node not in ["report_writer", "human_approval"]:
                     if current_step_has_tools:
                         yield f"data: {json.dumps({'type': 'thinking', 'content': current_step_content})}\n\n"
                     else:

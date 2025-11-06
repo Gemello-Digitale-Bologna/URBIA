@@ -250,15 +250,16 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         NOTE: this workaround was needed because nesting commands is bad behaviour - so we make a tool update a flag and then check it here.
         Basically an alternative to a conditional edge. 
         """
-        print(f"***routing function in get_next_node: report status is {state['report_status']}")
-        if state["report_status"] == "assigned":  # means the data analyst thinks it should write a report, called assign_to_report_writer_tool
+        report_status = state.get("report_status", "none")  # defaults to none it it wasn't initialized yet (correct, none is default value)
+        print(f"***routing function in get_next_node: report status is {report_status}")
+        if report_status == "assigned":  # means the data analyst thinks it should write a report, called assign_to_report_writer_tool
             print("***routing to report writer in get_next_node")
             return "report_writer"
-        elif state["report_status"] == "none":  # initial state, no calls to assign_to_report_writer_tool yet -> ends flow
+        elif report_status == "none":  # initial state, no calls to assign_to_report_writer_tool yet -> ends flow
             print("***routing to end flow in get_next_node")
             return "__end__"
         else:
-            raise ValueError(f"Invalid report status: {state['report_status']}")
+            raise ValueError(f"Invalid report status: {report_status}")
     
     def route_from_report_status(report_status: Literal["pending", "rejected"]):
         """
@@ -323,7 +324,8 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         return Command(
                 update={
                     "messages": [last_msg],
-                    "token_count": input_tokens  # Accumulates via reducer
+                    "token_count": input_tokens,  # Accumulates via reducer,
+                    "report_status": result.get("report_status", "none")  # assign to report writer
                 },
                 goto=goto
             )
@@ -345,15 +347,20 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
         """
 
         print("***arrived to report writer")
+        report_status = state.get("report_status", "assigned")  # defaults to assigned if it wasn't initialized yet (correct, assigned is default value)
+        # report status can now be only: assigned, pending, since we got to the write_report_node from the analyst agent node
+        print(f"***report status in write_report_node: {report_status}")
         # If there are edit instructions, add them to the messages and invoke the agent with the new messages
-        if state["report_status"] == "pending": # edits: revise existing report
+        if report_status == "pending": # edits: revise existing report
             print("***revising existing report in write_report_node")
             msg = f"Revise the report based on the following instructions: {state['edit_instructions']}"
             messages = state["messages"] + [HumanMessage(content=msg)]
-        elif state["report_status"] == "not_selected": # we got here so the user wants report to be written, first time -> no edits: write a new report
+        elif report_status == "assigned": # we got here so the user wants report to be written, first time -> no edits: write a new report
             print("***writing new report in write_report_node")
             msg = "Write a new report based on the analysis performed and the sources used."
             messages = state["messages"] + [HumanMessage(content=msg)]
+        else:
+            raise ValueError(f"Invalid report status: {report_status}. Since we got to the write_report_node from the analyst agent node, the report status can only be assigned or pending.")
 
         # invoke on full state but use messages with new sys msg
         print("***invoking report writer agent in write_report_node")

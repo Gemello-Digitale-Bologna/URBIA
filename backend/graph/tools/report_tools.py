@@ -43,9 +43,7 @@ def write_report_tool(
     print("***writing report in write_report_tool")
     # interrupt only if the writer is not editing an existing report
     if state["report_status"] == "assigned":  # means this is the first time the report is being written
-        print(f"***report status is 'assigned' in write_report_tool")
-
-        print("***asking for report writing approval in write_report_tool")
+        print(f"***report status is 'assigned' in write_report_tool: asking for report writing approval in write_report_tool")
 
         # refine this message in frontend and simplify it here in backend (the user will not see this below)
         response = interrupt(f"The model has finished its analysis and wants to write a report. To continue, input 'yes'. To reject, input 'no'.")
@@ -78,8 +76,8 @@ def write_report_tool(
         }
     )
 
-# probably should make a modify_report() tool that can be used to modify an existing report after it was approved. But maybe that can 
-# be frontend only.
+# probably should make a modify_report() tool that can be used to modify an existing report after it was approved. 
+# But maybe that can be done in the frontend only.
 
 @tool
 def write_source_tool(dataset_id: Annotated[str, "the dataset_id, i.e. the source"], runtime: ToolRuntime) -> Command:
@@ -112,8 +110,9 @@ def read_sources_tool(
     )
 
 
-# this one below could actually be a node; it chunks the code logs before getting to the fact checker. 
-# the fact checker only gets the read_code_logs_tool.
+# this one below could actually be a node; it chunks the code logs before getting to the reviewer.
+# the reviewer only gets the read_code_logs_tool.
+# probably we would need to check if the code logs are too long to be processed by the model, and if so, we chunk them.
 from langchain_text_splitters import TokenTextSplitter
 @tool 
 def get_code_logs_tool(
@@ -129,7 +128,7 @@ def get_code_logs_tool(
 
     code_logs_str = "\n".join([f"```python\n{code_log['input']}\n```\nstdout: ```bash\n{code_log['stdout']}\n```\nstderr: ```bash\n{code_log['stderr']}\n```" for code_log in code_logs])
 
-    # here we split the code logs into big chunks of 5000 tokens each;
+    # here we split the code logs into big chunks of 5000 tokens each, with big overlap for more context;
     splitter = TokenTextSplitter(model_name="gpt-4.1", chunk_size=5000, chunk_overlap=1000)
     code_logs_chunks = splitter.split_text(code_logs_str)
     num_chunks = len(code_logs_chunks)

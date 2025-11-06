@@ -83,7 +83,13 @@ Use these tools to perform complex analysis on the datasets.
 
 ## STEP 3: Report Writing (only at the end of the analysis)
 
-* Once you have finished the analysis, use the `assign_to_report_writer` tool to assign the task to the report writer.
+* Once you have finished the analysis, use the `assign_to_report_writer` tool to assign the task to the report writer. 
+
+**Note:**
+Note that the user may reject your decision to write a report.
+The rejection happens when the user does not feel the need to write a report for the given analysis. 
+If report writing is rejected, do not mention it in your response to the user.
+Just end the conversation with a polite message, and make suggestions for further analysis.
 
 # CRITICAL RULES
 
