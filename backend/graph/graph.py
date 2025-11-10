@@ -229,7 +229,7 @@ def make_graph(model_name: str | None = None, temperature: float | None = None, 
 
     from langchain.agents.middleware import SummarizationMiddleware   
     reviewer_llm = ChatOpenAI(**reviewer_kwargs)
-    reviewer_summarizer = ChatOpenAI(*reviewer_kwargs) # summarizer for reviewer (just for safety)
+    reviewer_summarizer = ChatOpenAI(**reviewer_kwargs) # summarizer for reviewer (just for safety)
     agent_reviewer = create_agent(
         model=reviewer_llm,
         tools=[
