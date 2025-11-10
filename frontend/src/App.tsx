@@ -5,6 +5,7 @@
 
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { SignedIn, SignedOut, RedirectToSignIn } from '@clerk/clerk-react';
 import { useChatStore } from '@/store/chatStore';
 import { ToastManager } from '@/components/Toast';
 import { useClerkSync } from '@/hooks/useClerkSync';
@@ -37,15 +38,25 @@ function App() {
   }, [theme]);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<ChatPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Routes>
+    <>
+      <SignedIn>
+        {/* User is signed in - show app */}
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<ChatPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+          </Routes>
+          
+          {/* Toast notifications (global) */}
+          <ToastManager toasts={toasts} onRemove={removeToast} />
+        </BrowserRouter>
+      </SignedIn>
       
-      {/* Toast notifications (global) */}
-      <ToastManager toasts={toasts} onRemove={removeToast} />
-    </BrowserRouter>
+      <SignedOut>
+        {/* User is signed out - redirect to sign in */}
+        <RedirectToSignIn />
+      </SignedOut>
+    </>
   );
 }
 

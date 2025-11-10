@@ -30,6 +30,7 @@ export function MessageInput() {
   const setIsReviewing = useChatStore((state) => state.setIsReviewing);
   const setAnalysisObjectives = useChatStore((state) => state.setAnalysisObjectives);
   const setCurrentReport = useChatStore((state) => state.setCurrentReport);
+  const apiKeys = useChatStore((state) => state.apiKeys);
   
   const [input, setInput] = useState('');
   const [interruptData, setInterruptData] = useState<any>(null); // Track graph interrupts (HITL)
@@ -42,6 +43,9 @@ export function MessageInput() {
   const clearArtifactBubbles = useChatStore((state) => state.clearArtifactBubbles);
   const contextUsage = useChatStore((state) => state.contextUsage);
   const isSummarizing = useChatStore((state) => state.isSummarizing);
+  
+  // Check if user has any API keys configured
+  const hasApiKeys = Boolean(apiKeys.openai || apiKeys.anthropic);
   
   // Use context_window from defaultConfig if contextUsage.maxTokens is still default
   const effectiveMaxTokens = contextUsage.maxTokens === 30000 && defaultConfig.context_window 
@@ -295,9 +299,15 @@ export function MessageInput() {
                 handleSubmit(e as any);
               }
             }}
-            placeholder={'Type a message...'}
+            placeholder={
+              !hasApiKeys 
+                ? "Please add API keys in Settings to start chatting" 
+                : currentThreadId 
+                  ? "Type a message..." 
+                  : "Create a new thread to start chatting"
+            }
             rows={1}
-            disabled={isStreaming}
+            disabled={isStreaming || !hasApiKeys}
             className="w-full px-4 py-3 pr-16 rounded-xl focus:outline-none focus:ring-2 focus:border-transparent resize-none disabled:opacity-50 transition-all duration-200 text-sm overflow-hidden"
             style={{ 
               border: '1px solid var(--border)', 
@@ -322,12 +332,12 @@ export function MessageInput() {
         {!isStreaming && (
           <button
             type="submit"
-            disabled={!input.trim() || !currentThreadId}
+            disabled={!input.trim() || !currentThreadId || !hasApiKeys}
             className="px-4 py-3 rounded-xl transition-all duration-200 flex items-center gap-2 shadow-sm hover:shadow-md disabled:shadow-none disabled:cursor-not-allowed"
             style={{ 
               backgroundColor: 'var(--user-message-bg)', 
               color: 'var(--user-message-text)',
-              opacity: (!input.trim() || !currentThreadId) ? 0.5 : 1
+              opacity: (!input.trim() || !currentThreadId || !hasApiKeys) ? 0.5 : 1
             }}
           >
             <Send size={18} />
