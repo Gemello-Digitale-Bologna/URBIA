@@ -10,6 +10,7 @@ import { ChatSidebar } from '@/components/ChatSidebar';
 import { ArtifactDisplay } from '@/components/ArtifactDisplay';
 import { AnalysisObjectivesDropdown } from '@/components/AnalysisObjectivesDropdown';
 import { ArtifactsPanel } from '@/components/ArtifactsPanel';
+import { ApiKeyWarning } from '@/components/ApiKeyWarning';
 
 export function ChatPage() {
   const currentThreadId = useChatStore((state) => state.currentThreadId);
@@ -79,6 +80,9 @@ export function ChatPage() {
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-slate-900 text-gray-700 dark:text-slate-200 overflow-hidden">
+      {/* API Key Warning Modal */}
+      <ApiKeyWarning />
+      
       {/* Sidebar: Thread list (resizable/collapsible) */}
       {!isSidebarCollapsed && (
         <aside

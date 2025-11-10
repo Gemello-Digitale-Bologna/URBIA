@@ -86,12 +86,14 @@ export function SettingsPage() {
     async function loadApiKeys() {
       try {
         const keys = await getUserApiKeys(userId);
-        // Set masked keys in inputs for display
+        // Don't set masked keys in inputs - they're just for display/checking existence
+        // Leave inputs empty so user can enter new keys
+        // Only show placeholder if keys exist
         setApiKeyInputs({
-          openai: keys.openai_key || '',
-          anthropic: keys.anthropic_key || '',
+          openai: '',
+          anthropic: '',
         });
-        // Update store with masked keys
+        // Update store to track if keys exist (for warning modal)
         setApiKeys({
           openai: keys.openai_key || null,
           anthropic: keys.anthropic_key || null,
@@ -141,17 +143,31 @@ export function SettingsPage() {
     setIsSavingKeys(true);
     setKeysSaveStatus('idle');
     try {
-      await saveUserApiKeys(userId, {
-        openai_key: apiKeyInputs.openai || null,
-        anthropic_key: apiKeyInputs.anthropic || null,
-      });
-      // Update store
-      setApiKeys({
-        openai: apiKeyInputs.openai || null,
-        anthropic: apiKeyInputs.anthropic || null,
-      });
+      // Only send keys that have been entered (non-empty)
+      const keysToSave: { openai_key?: string | null; anthropic_key?: string | null } = {};
+      if (apiKeyInputs.openai) {
+        keysToSave.openai_key = apiKeyInputs.openai;
+      }
+      if (apiKeyInputs.anthropic) {
+        keysToSave.anthropic_key = apiKeyInputs.anthropic;
+      }
+      
+      await saveUserApiKeys(userId, keysToSave);
+      
+      // Update store with the keys that were saved
+      if (apiKeyInputs.openai) {
+        setApiKeys((prev) => ({ ...prev, openai: apiKeyInputs.openai }));
+      }
+      if (apiKeyInputs.anthropic) {
+        setApiKeys((prev) => ({ ...prev, anthropic: apiKeyInputs.anthropic }));
+      }
+      
       setKeysSaveStatus('success');
-      setTimeout(() => setKeysSaveStatus('idle'), 2000);
+      
+      // Redirect to chat after successful save (so warning disappears)
+      setTimeout(() => {
+        navigate('/');
+      }, 1500);
     } catch (err) {
       console.error('Failed to save API keys:', err);
       setKeysSaveStatus('error');
@@ -316,7 +332,7 @@ export function SettingsPage() {
 
           <div className="space-y-4">
             <p className="text-sm text-gray-600 dark:text-slate-400">
-              API keys are encrypted and stored securely. They will be used for all requests.
+              API keys are encrypted and stored securely. Enter a new key to update it, or leave empty to keep the existing one.
             </p>
 
             {/* OpenAI Key */}
@@ -327,7 +343,7 @@ export function SettingsPage() {
                   type={showKeys.openai ? 'text' : 'password'}
                   value={apiKeyInputs.openai}
                   onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, openai: e.target.value }))}
-                  placeholder="sk-..."
+                  placeholder="sk-proj-... (enter new key or leave empty to keep existing)"
                   className="w-full px-3 py-2 pr-10 border rounded-lg focus:ring-2 focus:ring-gray-800 dark:focus:ring-gray-600 focus:border-gray-800 dark:focus:border-gray-600 transition-all outline-none"
                   style={{ 
                     border: '1px solid var(--border)', 
@@ -353,7 +369,7 @@ export function SettingsPage() {
                   type={showKeys.anthropic ? 'text' : 'password'}
                   value={apiKeyInputs.anthropic}
                   onChange={(e) => setApiKeyInputs((prev) => ({ ...prev, anthropic: e.target.value }))}
-                  placeholder="sk-ant-..."
+                  placeholder="sk-ant-... (enter new key or leave empty to keep existing)"
                   className="w-full px-3 py-2 pr-10 border rounded-lg focus:ring-2 focus:ring-gray-800 dark:focus:ring-gray-600 focus:border-gray-800 dark:focus:border-gray-600 transition-all outline-none"
                   style={{ 
                     border: '1px solid var(--border)', 
