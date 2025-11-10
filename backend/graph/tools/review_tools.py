@@ -20,6 +20,18 @@ async def approve_analysis_tool(
     )
 
 @tool
+async def approve_analysis_and_request_report_tool(
+    reason: Annotated[str, "Brief reason why a report is warranted"],
+    runtime: ToolRuntime
+) -> Command:
+    """Approve the analysis AND request a written report. Use for complex/comprehensive analyses."""
+    return Command(update={
+        "analysis_status": "approved",
+        "report_status": "assigned",
+        "messages": [ToolMessage(content=f"Analysis approved. Report requested: {reason}", tool_call_id=runtime.tool_call_id)],
+    })
+
+@tool
 async def reject_analysis_tool(
     comments: Annotated[str, "Comments for the analyst to improve the analysis"],
     runtime: ToolRuntime
@@ -39,19 +51,19 @@ async def reject_analysis_tool(
     )
 
 @tool
-async def error_occurred_tool(
-    error: Annotated[str, "A brief explanation of the error that occurred and why the flow should end"],
+async def end_flow_tool(
+    reason: Annotated[str, "A brief explanation of the reason why the flow should end"],
     runtime: ToolRuntime
 ) -> Command:
     """
-    Use this to indicate that an error occurred and the flow should end.
+    Use this to end the flow.
     Arguments:
-        error: A brief explanation of the error that occurred and why the flow should end
+        reason: A brief explanation of the reason why the flow should end
     """
-    print(f"***error occurred in error_occurred_tool: {error}")
+    print(f"***ending flow in end_flow_tool: {reason}")
     return Command(update={
-        "messages" : [ToolMessage(content=f"Error occurred: {error}", tool_call_id=runtime.tool_call_id)],
-        "analysis_status": "error_occurred"
+        "messages" : [ToolMessage(content=f"Flow ended: {reason}", tool_call_id=runtime.tool_call_id)],
+        "analysis_status": "end_flow"  # we use this flag to indicate that the flow should end
     })
 
 @tool 

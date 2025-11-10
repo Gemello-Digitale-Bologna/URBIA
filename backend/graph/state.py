@@ -89,9 +89,9 @@ def status_replace(
     return right
 
 def status_replace_analysis(
-    left: Literal["pending", "approved", "rejected", "limit_exceeded", "error_occurred"] | None,
-    right: Literal["pending", "approved", "rejected", "limit_exceeded", "error_occurred"] | None
-) -> Literal["pending", "approved", "rejected", "limit_exceeded", "error_occurred"]:
+    left: Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"] | None,
+    right: Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"] | None
+) -> Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"]:
     if left is None:
         left = "pending"
     if right is None:
@@ -140,7 +140,7 @@ class MyState(AgentState):
     # review features
 
     ## analysys 
-    analysis_status : Annotated[Literal["pending", "approved", "rejected", "limit_exceeded", "error_occurred"], status_replace_analysis]
+    analysis_status : Annotated[Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"], status_replace_analysis]
     analysis_comments : Annotated[str, str_replace]  # comments for the analyst to improve the analysis
     analysis_objectives: Annotated[list[str], list_replace_str] # objectives of the analysis
     ## reroute afte review
