@@ -1,7 +1,7 @@
 from typing_extensions import Annotated
 from langchain.tools import tool, ToolRuntime
 from langchain_core.messages import ToolMessage
-from langgraph.types import Command, Literal
+from langgraph.types import Command
 
 @tool
 async def approve_analysis_tool(
@@ -15,21 +15,10 @@ async def approve_analysis_tool(
     return Command(
         update={
             "analysis_status": "approved",
-            "messages" : [ToolMessage(content=f"Analysis approved", tool_call_id=runtime.tool_call_id)],
+            "analysis_comments" : "", # reset any analysis comments (they are for rejected analyses)
+            "messages" : [ToolMessage(content=f"Analysis approved from the reviewer.", tool_call_id=runtime.tool_call_id)],
         }
     )
-
-@tool
-async def approve_analysis_and_request_report_tool(
-    reason: Annotated[str, "Brief reason why a report is warranted"],
-    runtime: ToolRuntime
-) -> Command:
-    """Approve the analysis AND request a written report. Use for complex/comprehensive analyses."""
-    return Command(update={
-        "analysis_status": "approved",
-        "report_status": "assigned",
-        "messages": [ToolMessage(content=f"Analysis approved. Report requested: {reason}", tool_call_id=runtime.tool_call_id)],
-    })
 
 @tool
 async def reject_analysis_tool(
@@ -39,32 +28,16 @@ async def reject_analysis_tool(
     """
     Use this to reject the analysis, with constructive criticism for the analyst to improve the analysis.
     Arguments:
-        comments: Constructive criticism for the analyst to improve the analysis
+        comments: Constructive criticism for the analyst to improve the analysis.
     """
     print(f"***rejecting analysis in reject_analysis_tool: {comments}")
     return Command(
         update={
             "analysis_status": "rejected",
             "analysis_comments": comments,
-            "messages" : [ToolMessage(content=f"Analysis rejected with critiques:\n {comments}", tool_call_id=runtime.tool_call_id)],
+            "messages" : [ToolMessage(content=f"Analysis rejected by reviewer, with the following comment for the analyst:\n {comments}", tool_call_id=runtime.tool_call_id)],
         }
     )
-
-@tool
-async def end_flow_tool(
-    reason: Annotated[str, "A brief explanation of the reason why the flow should end"],
-    runtime: ToolRuntime
-) -> Command:
-    """
-    Use this to end the flow.
-    Arguments:
-        reason: A brief explanation of the reason why the flow should end
-    """
-    print(f"***ending flow in end_flow_tool: {reason}")
-    return Command(update={
-        "messages" : [ToolMessage(content=f"Flow ended: {reason}", tool_call_id=runtime.tool_call_id)],
-        "analysis_status": "end_flow"  # we use this flag to indicate that the flow should end
-    })
 
 @tool 
 async def update_completeness_score(grade: Annotated[int, "The grade of the completeness score"], runtime: ToolRuntime) -> Command:
@@ -91,7 +64,6 @@ async def update_correctness_score(grade: Annotated[int, "The grade of the corre
         "messages" : [ToolMessage(content=f"Correctness score updated to: {grade}", tool_call_id=runtime.tool_call_id)],
         "correctness_score": grade
     })
-
 
 @tool 
 async def update_reliability_score(score: Annotated[int, "The score of the reliability score"], runtime: ToolRuntime) -> Command:
