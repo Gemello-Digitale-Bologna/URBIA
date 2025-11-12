@@ -482,13 +482,12 @@ def make_graph(
 
     builder = StateGraph(MyState)
 
-    # REFACTOR THIS
-    builder.add_node("supervisor", supervisor_agent, destinations=("data_analyst", "reort_writer", "reviewer", END))
+    builder.add_node("supervisor", supervisor_agent)  # , destinations=("data_analyst", "report_writer", "reviewer", END) <-- probably not needed in v1
     builder.add_node("data_analyst", analyst_agent_node)
     builder.add_node("summarizer", summarize_conversation)
     builder.add_node("report_writer", write_report_node)  #again, no edge because of Command(goto="...") in write_report_node
     builder.add_node("reviewer", reviewer_agent_node)
-    builder.add_edge(START, "supervisor")    # notice we do not add an edge to summarizer because we have Command[Literal[...]] in analyst agent node
+    builder.add_edge(START, "supervisor")  # since we have Command(goto=...) everywhere, we do not need other edges. 
     
     graph = builder.compile(checkpointer=checkpointer)
 
