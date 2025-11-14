@@ -8,6 +8,7 @@ import { Send } from 'lucide-react';
 import { useChatStore } from '@/store/chatStore';
 import { ContextIndicator } from './ContextIndicator';
 import { InterruptModal } from './InterruptModal';
+import { ModelSelector } from './ModelSelector';
 import { useSSE } from '@/hooks/useSSE';
 import { createThread, updateThreadConfig, listMessages, getThreadState } from '@/utils/api';
 import type { Message } from '@/types/api';
@@ -16,7 +17,7 @@ export function MessageInput() {
   const currentThreadId = useChatStore((state) => state.currentThreadId);
   const setCurrentThreadId = useChatStore((state) => state.setCurrentThreadId);
   const addMessage = useChatStore((state) => state.addMessage);
-  const updateMessage = useChatStore((state) => state.updateMessage);
+  const setMessages = useChatStore((state) => state.setMessages);
   const addThread = useChatStore((state) => state.addThread);
   const userId = useChatStore((state) => state.userId);
   const defaultConfig = useChatStore((state) => state.defaultConfig);
@@ -39,6 +40,8 @@ export function MessageInput() {
   const addToolDraft = useChatStore((state) => state.addToolDraft);
   const removeToolDraft = useChatStore((state) => state.removeToolDraft);
   const clearToolDrafts = useChatStore((state) => state.clearToolDrafts);
+  const addSubagentDraft = useChatStore((state) => state.addSubagentDraft);
+  const clearSubagentDrafts = useChatStore((state) => state.clearSubagentDrafts);
   const addArtifactBubble = useChatStore((state) => state.addArtifactBubble);
   const clearArtifactBubbles = useChatStore((state) => state.clearArtifactBubbles);
   const contextUsage = useChatStore((state) => state.contextUsage);
@@ -98,12 +101,23 @@ export function MessageInput() {
       }
     },
     onToken: (content) => {
-      // Accumulate token chunks for assistant message
+      // Accumulate token chunks for assistant message (supervisor)
       streamingRef.current = streamingRef.current + content;
       if (currentThreadId) {
         setDraft(currentThreadId, streamingRef.current);
         // Clear all tool drafts when assistant starts responding
         clearToolDrafts(currentThreadId);
+      }
+    },
+    onSubagentToken: (agent, content) => {
+      // Accumulate token chunks for subagent messages
+      if (currentThreadId) {
+        // Get existing content or start fresh
+        const existing = useChatStore.getState().subagentDrafts.find(
+          (s) => s.threadId === currentThreadId && s.agent === agent
+        );
+        const newContent = existing ? existing.content + content : content;
+        addSubagentDraft(currentThreadId, agent, newContent);
       }
     },
     onToolStart: (name, input) => {
@@ -166,18 +180,6 @@ export function MessageInput() {
     },
     onDone: async (messageId) => {
       console.log('onDone called with messageId:', messageId);
-      // Stream complete; add finalized assistant message to state
-      const finalText = streamingRef.current.trim();
-      console.log('Final text length:', finalText.length);
-      if (finalText) {
-        const assistantMsg: Message = {
-          id: messageId || crypto.randomUUID(),
-          thread_id: currentThreadId!,
-          role: 'assistant',
-          content: { text: finalText },
-        };
-        addMessage(assistantMsg);
-      }
       // Reset streaming state
       streamingRef.current = '';
       clearDraft();
@@ -186,41 +188,37 @@ export function MessageInput() {
       // Clear any remaining tool drafts (handles failed tools that didn't send tool_end)
       if (currentThreadId) {
         clearToolDrafts(currentThreadId);
+        clearSubagentDrafts(currentThreadId);
       }
       
-      // Smoothly update the assistant message with artifacts from DB
-      if (currentThreadId && messageId) {
-        // Longer delay to ensure backend has committed artifacts to DB
+      // Refetch all messages from DB to get the correct order (supervisor + subagents)
+      // Backend saves all messages (supervisor + subagents) so we need to refetch to see them all
+      if (currentThreadId) {
+        // Short delay to ensure backend has committed all messages to DB
         setTimeout(async () => {
           try {
             const messages = await listMessages(currentThreadId);
-            // Find the assistant message we just added
-            const assistantMsg = messages.find(m => m.id === messageId);
-            if (assistantMsg && assistantMsg.artifacts && assistantMsg.artifacts.length > 0) {
-              // Update only this specific message with artifacts
-              updateMessage(messageId, { artifacts: assistantMsg.artifacts });
-              // Clear artifact bubbles ONLY after successfully loading from DB
+            
+            // Update store with fresh messages from DB (reversed for chronological order)
+            // Backend returns messages in desc order (newest first), reverse for display
+            setMessages(messages.reverse());
+            
+            // Check if ANY message in the thread has artifacts
+            const allArtifacts = messages
+              .filter(m => m.artifacts && m.artifacts.length > 0)
+              .flatMap(m => m.artifacts || []);
+            
+            if (allArtifacts.length > 0) {
+              // Artifacts are now in store - safe to clear bubbles
+              // The de-duplicator in ArtifactDisplay will show them from messages
               clearArtifactBubbles(currentThreadId);
             } else {
-              console.log('Artifacts not in DB yet, keeping bubbles visible for 2 more seconds');
-              // Retry once more after additional delay
-              setTimeout(async () => {
-                try {
-                  const retryMessages = await listMessages(currentThreadId);
-                  const retryMsg = retryMessages.find(m => m.id === messageId);
-                  if (retryMsg && retryMsg.artifacts && retryMsg.artifacts.length > 0) {
-                    updateMessage(messageId, { artifacts: retryMsg.artifacts });
-                    clearArtifactBubbles(currentThreadId);
-                  }
-                } catch (err) {
-                  console.error('Retry failed to load artifacts:', err);
-                }
-              }, 2000);
+              console.log('No artifacts in DB yet, keeping bubbles visible');
             }
           } catch (err) {
-            console.error('Failed to update message with artifacts:', err);
+            console.error('Failed to fetch messages after done:', err);
           }
-        }, 500); // Increased delay for DB commit
+        }, 300);  // Slightly longer delay to ensure all messages (including subagents) are committed
       }
     },
     onError: (error) => {
@@ -308,7 +306,7 @@ export function MessageInput() {
             }
             rows={1}
             disabled={isStreaming || !hasApiKeys}
-            className="w-full px-4 py-3 pr-16 rounded-xl focus:outline-none focus:ring-2 focus:border-transparent resize-none disabled:opacity-50 transition-all duration-200 text-sm overflow-hidden"
+            className="w-full px-4 py-3 pr-16 pb-10 rounded-xl focus:outline-none focus:ring-2 focus:border-transparent resize-none disabled:opacity-50 transition-all duration-200 text-sm overflow-hidden"
             style={{ 
               border: '1px solid var(--border)', 
               backgroundColor: 'var(--bg-secondary)', 
@@ -325,6 +323,11 @@ export function MessageInput() {
               maxTokens={effectiveMaxTokens}
               isSummarizing={isSummarizing}
             />
+          </div>
+
+          {/* Model selector in bottom-left corner inside textarea */}
+          <div className="absolute bottom-2 left-3">
+            <ModelSelector />
           </div>
         </div>
 

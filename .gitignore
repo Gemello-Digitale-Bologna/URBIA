@@ -79,3 +79,7 @@ start-rds-tunnel-COPY.sh
 # README
 .github/ACTIONS-README.md
 
+# legacy code
+*legacy*
+legacy/
+

@@ -54,15 +54,38 @@ def list_add(
 
 def list_replace_str(
     left: list[str] | None,
-    right: list[str] | None
+    right: list[str] | None | int
 ) -> list[str]:
-    """Replace list of strings entirely instead of concatenating. Used for code logs chunks and analysis objectives"""
+    """
+    Replace list of strings entirely instead of concatenating. Used for code logs chunks and analysis objectives.
+    """
     if left is None:
         left = []
     if right is None:
         right = []
 
     return right
+
+def list_add_noduplicates(
+    left: list[str] | None,
+    right: list[str] | None
+) -> list[str]:
+    """
+    Add items from right to left without adding duplicates. Used for sources (dataset IDs).
+    Maintains order: existing items first, then new items.
+    """
+    if left is None:
+        left = []
+    if right is None:
+        right = []
+
+    # Add items from right that aren't already in left
+    result = left.copy()
+    for item in right:
+        if item not in result:
+            result.append(item)
+    
+    return result
 
 def str_replace(
     left: str | None,
@@ -77,18 +100,6 @@ def str_replace(
     return right
 
 def status_replace(
-    left: Literal["none", "assigned", "pending", "rejected", "accepted"] | None,
-    right: Literal["none", "assigned", "pending", "rejected", "accepted"] | None
-) -> Literal["none", "assigned", "pending", "rejected", "accepted"]: # "none" is the initial state
-    """Update the report status just by replacing strings. Reducer needed to initialize when None"""
-    if left is None:
-        left = "none"
-    if right is None:
-        right = "none"
-
-    return right
-
-def status_replace_analysis(
     left: Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"] | None,
     right: Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"] | None
 ) -> Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"]:
@@ -130,17 +141,15 @@ class MyState(AgentState):
     token_count : Annotated[int, update_token_count]
     
     # report features 
-    sources : Annotated[list[str], list_add] # list of dataset ids
+    sources : Annotated[list[str], list_add_noduplicates] # list of dataset ids - no duplicated sources!
     reports: Annotated[dict[str, str], merge_dicts]  # key is the title, value is the content 
-    report_status : Annotated[Literal["none", "assigned", "pending", "rejected", "accepted"], status_replace]
     last_report_title : Annotated[str, str_replace]  # title of the last report written
-    edit_instructions : Annotated[str, str_replace]  # instructions for the report writer to edit the report
     code_logs: Annotated[list[dict[str, str]], list_add]  # list of dicts (we need chronological order!), each dicts is input and output of a code block (out can be stdout or stderr or both)
     code_logs_chunks: Annotated[list[str], list_replace_str]  # list of strings, each string is a chunk of already ordered code logs - we first stringify code_logs correclty, then separate it in chunks (see get_code_logs_tool in report_tools.py)
+    
     # review features
-
     ## analysys 
-    analysis_status : Annotated[Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"], status_replace_analysis]
+    analysis_status : Annotated[Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"], status_replace]
     analysis_comments : Annotated[str, str_replace]  # comments for the analyst to improve the analysis
     analysis_objectives: Annotated[list[str], list_replace_str] # objectives of the analysis
     ## reroute afte review
