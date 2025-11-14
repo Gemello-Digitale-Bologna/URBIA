@@ -18,7 +18,7 @@ export interface Message {
   tool_name?: string | null;
   tool_input?: Record<string, any> | null;
   tool_output?: Record<string, any> | null;
-  meta?: { agent?: string } | null;  // For subagent messages: { agent: 'data_analyst' | 'report_writer' | 'reviewer' }
+  meta?: { agent?: string; segment_index?: number } | null;  // For subagent messages: { agent: 'data_analyst' | 'report_writer' | 'reviewer', segment_index?: number }
   artifacts?: Artifact[];
   created_at?: string;  // ISO timestamp from backend
 }
