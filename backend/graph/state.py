@@ -11,9 +11,9 @@ def update_token_count(token_count: int | None = None, token_used: int | None = 
     if token_used is None:
         token_used = 0
         
-    # a value of -1 means reset to 0
-    if token_used == -1:
-        return 0
+    # a negative value means reset to that value (used for reset after summary)
+    if token_used < 0:
+        return token_used
     else:
         return token_count + token_used
 
