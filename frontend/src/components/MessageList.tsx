@@ -20,10 +20,20 @@ export function MessageList() {
   const thinkingBlock = useChatStore((state) => state.thinkingBlock);
   const toolDrafts = useChatStore((state) => state.toolDrafts);
   const subagentDrafts = useChatStore((state) => state.subagentDrafts);
+  const subagentSegments = useChatStore((state) => state.subagentSegments);
   const [showScrollButton, setShowScrollButton] = useState(false);
+
+  const clearSubagentSegments = useChatStore((state) => state.clearSubagentSegments);
+  const prevThreadIdRef = useRef<string | null>(null);
 
   // Fetch messages when thread changes
   useEffect(() => {
+    // Clear segments for the previous thread when switching
+    if (prevThreadIdRef.current && prevThreadIdRef.current !== currentThreadId) {
+      clearSubagentSegments(prevThreadIdRef.current);
+    }
+    prevThreadIdRef.current = currentThreadId;
+
     if (!currentThreadId) {
       setMessages([]);
       return;
@@ -39,7 +49,7 @@ export function MessageList() {
       }
     }
     loadMessages();
-  }, [currentThreadId, setMessages]);
+  }, [currentThreadId, setMessages, clearSubagentSegments]);
 
   // Check if user is near bottom (to show/hide scroll button)
   const handleScroll = useCallback(() => {
@@ -60,7 +70,7 @@ export function MessageList() {
   // Auto-scroll when new AI messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingDraft, thinkingBlock, toolDrafts, subagentDrafts]);
+  }, [messages, streamingDraft, thinkingBlock, toolDrafts, subagentDrafts, subagentSegments]);
 
   if (!currentThreadId) {
     return (
@@ -78,6 +88,109 @@ export function MessageList() {
     );
   }
 
+  // Extract segments from saved messages (those with segment_index in meta)
+  const savedSegments = messages
+    .filter(msg => 
+      msg.role === 'assistant' && 
+      msg.meta?.agent && 
+      msg.meta?.segment_index !== undefined &&
+      msg.thread_id === currentThreadId
+    )
+    .sort((a, b) => {
+      // Sort by agent first, then by segment_index
+      if (a.meta?.agent !== b.meta?.agent) {
+        return (a.meta?.agent || '').localeCompare(b.meta?.agent || '');
+      }
+      return (a.meta?.segment_index || 0) - (b.meta?.segment_index || 0);
+    });
+  
+  // Parse user message ID from segment message_id
+  // Format: "subagent:{user_message_id}:{agent}:segment:{index}"
+  const parseUserMessageId = (messageId: string | null | undefined): string | null => {
+    if (!messageId) return null;
+    const match = messageId.match(/^subagent:([^:]+):/);
+    return match ? match[1] : null;
+  };
+  
+  // Combine frontend segments (during streaming) with saved segments (from DB)
+  const currentSegments = subagentSegments
+    .filter((s) => s.threadId === currentThreadId)
+    .map((s) => ({
+      id: s.id,
+      agent: s.agent,
+      content: s.content,
+      timestamp: s.timestamp || Date.now(),
+      userMessageId: null, // Frontend segments don't have message_id yet
+    }));
+  
+  const savedSegmentEntries = savedSegments.map((msg) => ({
+    id: msg.id,
+    agent: msg.meta!.agent!,
+    content: msg.content?.text || JSON.stringify(msg.content),
+    timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+    userMessageId: parseUserMessageId(msg.message_id), // Extract user message ID from message_id
+  }));
+  
+  // Group segments by user message ID
+  const segmentsByUserMessage = new Map<string, typeof savedSegmentEntries>();
+  for (const seg of savedSegmentEntries) {
+    if (seg.userMessageId) {
+      if (!segmentsByUserMessage.has(seg.userMessageId)) {
+        segmentsByUserMessage.set(seg.userMessageId, []);
+      }
+      segmentsByUserMessage.get(seg.userMessageId)!.push(seg);
+    }
+  }
+  
+  // For frontend segments (during streaming), we'll insert them at the end
+  // They'll be cleared once backend saves them
+  const allSegments = [...savedSegmentEntries, ...currentSegments];
+  const agentsWithSegments = new Set(allSegments.map((seg) => seg.agent));
+  
+  // Filter messages: hide tool messages and subagent messages replaced by segments
+  const filteredMessages = messages.filter((msg) => {
+    if (msg.role === 'tool') return false;
+    
+    if (msg.role === 'assistant' && msg.meta?.agent) {
+      // Hide saved segment messages (they're rendered as SubagentBubble)
+      if (msg.meta?.segment_index !== undefined) return false;
+      // Hide aggregated subagent messages if we have segments for that agent
+      if (agentsWithSegments.has(msg.meta.agent)) return false;
+    }
+    
+    return true;
+  });
+  
+  // Build timeline: insert segments after their corresponding user message
+  const timeline: Array<{ type: 'message'; id: string; data: Message } | { type: 'segment'; id: string; data: { agent: string; content: string } }> = [];
+  
+  for (let i = 0; i < filteredMessages.length; i++) {
+    const msg = filteredMessages[i];
+    timeline.push({ type: 'message', id: msg.id, data: msg });
+    
+    if (msg.role === 'user' && msg.message_id) {
+      // Insert segments that belong to this user message
+      const turnSegments = segmentsByUserMessage.get(msg.message_id) || [];
+      for (const seg of turnSegments) {
+        timeline.push({
+          type: 'segment',
+          id: seg.id,
+          data: { agent: seg.agent, content: seg.content },
+        });
+      }
+    }
+  }
+  
+  // Insert frontend segments (during streaming) at the end
+  // These don't have userMessageId yet, so they appear after all messages
+  for (const seg of currentSegments) {
+    timeline.push({
+      type: 'segment',
+      id: seg.id,
+      data: { agent: seg.agent, content: seg.content },
+    });
+  }
+
   return (
     <div className="relative h-full">
       <div 
@@ -85,14 +198,24 @@ export function MessageList() {
         onScroll={handleScroll}
         className="space-y-4 p-4 h-full overflow-y-auto"
       >
-        {messages
-          .filter(msg => msg.role !== 'tool') // Hide tool messages from permanent display
-          .map((msg) => (
-            <MessageBubble 
-              key={msg.id} 
-              message={msg} 
+        {/* Regular messages (user, assistant with agent but no segments, etc.) */}
+        {timeline.map((item) => {
+          if (item.type === 'message') {
+            return (
+              <MessageBubble
+                key={item.id}
+                message={item.data}
+              />
+            );
+          }
+          return (
+            <SubagentBubble
+              key={item.id}
+              agent={item.data.agent}
+              content={item.data.content}
             />
-          ))}
+          );
+        })}
         
         {/* Thinking block (Claude extended thinking) */}
         {thinkingBlock && thinkingBlock.threadId === currentThreadId && (

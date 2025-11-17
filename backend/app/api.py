@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import get_session
@@ -475,6 +475,7 @@ class ArtifactOut(BaseModel):
 class MessageOut(BaseModel):
     id: UUID
     thread_id: UUID
+    message_id: Optional[str] = None  # Client-supplied idempotency key, also used to link segments to user messages
     role: str
     content: Optional[dict] = None
     tool_name: Optional[str] = None
@@ -482,6 +483,7 @@ class MessageOut(BaseModel):
     tool_output: Optional[dict] = None
     meta: Optional[dict] = None  # For storing agent name in subagent messages
     artifacts: list[ArtifactOut] = []
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -575,9 +577,14 @@ async def list_messages(
         .where(Message.thread_id == thread_id)
         .order_by(
             Message.created_at.desc(),
-            # Prioritize supervisor messages (assistant:) over subagent messages (subagent:)
-            # Using asc() so "assistant:" comes before "subagent:" alphabetically
-            Message.message_id.asc(),
+            # Custom ordering: tool messages first, then subagent segments, then supervisor
+            # This ensures correct chronological order even when timestamps are identical
+            case(
+                (Message.message_id.like("tool:%"), 0),
+                (Message.message_id.like("subagent:%"), 1),
+                (Message.message_id.like("assistant:%"), 2),
+                else_=3
+            ).asc(),
             Message.id.desc()  # Final tie-breaker for deterministic ordering
         )
         .limit(limit)
@@ -598,6 +605,7 @@ async def list_messages(
         msg_dict = {
             "id": msg.id,
             "thread_id": msg.thread_id,
+            "message_id": msg.message_id,  # Include message_id for frontend to link segments to user messages
             "role": msg.role,
             "content": content,
             "tool_name": msg.tool_name,
@@ -806,7 +814,7 @@ async def post_message_stream(
         from backend.graph.graph import make_graph
         from backend.main import _checkpointer_cm
         from backend.db.session import ASYNC_SESSION_MAKER
-        from backend.graph.context import set_db_session, set_thread_id
+        from backend.graph.context import set_db_session, set_thread_id, clear_db_session, clear_thread_id
         import uuid as uuid_module
         
         if not _checkpointer_cm:
@@ -832,6 +840,7 @@ async def post_message_stream(
             context_window=cfg.context_window if cfg else None,  # Use thread config or env default
             checkpointer=_checkpointer_cm[0],  # Reuse global checkpointer
             user_api_keys=user_api_keys,
+            plot_graph=False,
         )
         
         # Log model being used for this message
@@ -867,6 +876,9 @@ async def post_message_stream(
                 supervisor_content = ""  # Supervisor messages (main response)
                 subagent_content = {}  # Subagent messages: {"data_analyst": "", "report_writer": "", "reviewer": ""}
                 subagent_order = []  # Track execution order: ["data_analyst", "reviewer", ...]
+                # Track segments for each agent (saved when tools start)
+                subagent_segments = {}  # {"data_analyst": [{"content": "...", "segment_index": 0}, ...]}
+                subagent_segment_counters = {}  # Track segment index per agent
                 
                 # Track the last known agent node to handle cases where node becomes "model"/"tools"
                 last_known_agent_node = None
@@ -971,9 +983,10 @@ async def post_message_stream(
                         elif current_agent_node == "reviewer":
                             yield f"data: {json.dumps({'type': 'reviewing', 'status': 'start'})}\n\n"
                     
-                    # Detect summarization end
-                    elif event_type == "on_chain_end" and node == "agent":
-                        # Emit context update after agent finishes processing
+                    # Detect agent node end - send context update after any agent finishes processing
+                    # Note: supervisor is excluded because it doesn't update token_count
+                    elif event_type == "on_chain_end" and node in ["agent", "data_analyst", "reviewer", "report_writer"]:
+                        # Emit context update after any agent node finishes processing
                         try:
                             from backend.config import CONTEXT_WINDOW as DEFAULT_CONTEXT_WINDOW
                             state_snapshot = await graph.aget_state(config)
@@ -994,11 +1007,46 @@ async def post_message_stream(
                     # Detect reviewer end
                     elif event_type == "on_chat_model_end" and current_agent_node == "reviewer":
                         yield f"data: {json.dumps({'type': 'reviewing', 'status': 'done'})}\n\n"
+                    
+                    # Send context update after any agent's chat model ends (including subagents)
+                    elif event_type == "on_chat_model_end" and current_agent_node:
+                        # Skip summarizer (handled separately) and supervisor (handled by on_chain_end)
+                        if current_agent_node not in ["summarizer", "supervisor"]:
+                            try:
+                                from backend.config import CONTEXT_WINDOW as DEFAULT_CONTEXT_WINDOW
+                                state_snapshot = await graph.aget_state(config)
+                                token_count = state_snapshot.values.get("token_count", 0) if state_snapshot.values else 0
+                                max_tokens = cfg.context_window if cfg and cfg.context_window else DEFAULT_CONTEXT_WINDOW
+                                yield f"data: {json.dumps({'type': 'context_update', 'tokens_used': token_count, 'max_tokens': max_tokens})}\n\n"
+                            except Exception as e:
+                                logging.warning(f"Failed to get state for context update after {current_agent_node}: {e}")
                 
                     # Stream tool execution start
                     elif event_type == "on_tool_start":
                         tool_input = event.get("data", {}).get("input")
                         yield f"data: {json.dumps({'type': 'tool_start', 'name': event_name, 'input': to_jsonable(tool_input)})}\n\n"
+                        
+                        # Save current segment for the active agent before tool starts
+                        if current_agent_node and current_agent_node in ["data_analyst", "report_writer", "reviewer"]:
+                            agent_name = current_agent_node
+                            if agent_name in subagent_content and subagent_content[agent_name].strip():
+                                # Initialize segments list and counter if needed
+                                if agent_name not in subagent_segments:
+                                    subagent_segments[agent_name] = []
+                                    subagent_segment_counters[agent_name] = 0
+                                
+                                # Save current content as a segment
+                                segment_content = subagent_content[agent_name]
+                                segment_index = subagent_segment_counters[agent_name]
+                                subagent_segments[agent_name].append({
+                                    "content": segment_content,
+                                    "segment_index": segment_index
+                                })
+                                subagent_segment_counters[agent_name] += 1
+                                
+                                # Reset content for next segment
+                                subagent_content[agent_name] = ""
+                                logging.debug(f"Saved segment {segment_index} for {agent_name}, content length: {len(segment_content)}")
                         
                     # Stream tool execution end and capture for persistence
                     elif event_type == "on_tool_end":   
@@ -1184,33 +1232,69 @@ async def post_message_stream(
                     import asyncio
                     await asyncio.sleep(0.01)  # 10ms delay
                     
-                    # Save subagent messages AFTER supervisor
+                    # Save subagent segments AFTER supervisor
                     # Order subagents by their actual execution order (tracked during streaming)
                     # This ensures messages appear in the order they were executed, not a hardcoded order
                     for agent_name in subagent_order:
-                        if agent_name in subagent_content and subagent_content[agent_name]:
-                            agent_content = subagent_content[agent_name]
+                        # Save all segments for this agent
+                        if agent_name in subagent_segments:
+                            for segment in subagent_segments[agent_name]:
+                                segment_content = segment["content"]
+                                segment_index = segment["segment_index"]
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{payload.message_id}:{agent_name}:segment:{segment_index}",
+                                    role="assistant",
+                                    content={"text": segment_content} if isinstance(segment_content, str) else segment_content,
+                                    meta={"agent": agent_name, "segment_index": segment_index},
+                                )
+                                write_sess.add(subagent_msg)
+                                await asyncio.sleep(0.01)  # Small delay between each segment
+                        
+                        # Save any remaining content as final segment (if there's content after last tool)
+                        if agent_name in subagent_content and subagent_content[agent_name].strip():
+                            remaining_content = subagent_content[agent_name]
+                            # Get the next segment index
+                            segment_index = subagent_segment_counters.get(agent_name, 0)
                             subagent_msg = Message(
                                 thread_id=t.id,
-                                message_id=f"subagent:{payload.message_id}:{agent_name}",
+                                message_id=f"subagent:{payload.message_id}:{agent_name}:segment:{segment_index}",
                                 role="assistant",
-                                content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
-                                meta={"agent": agent_name},
+                                content={"text": remaining_content} if isinstance(remaining_content, str) else remaining_content,
+                                meta={"agent": agent_name, "segment_index": segment_index},
                             )
                             write_sess.add(subagent_msg)
-                            await asyncio.sleep(0.01)  # Small delay between each subagent
+                            await asyncio.sleep(0.01)  # Small delay
                     
                     # Handle any subagents not in the tracked order (shouldn't happen, but safety check)
+                    # Save their segments if they exist
+                    for agent_name in subagent_segments:
+                        if agent_name not in subagent_order:
+                            for segment in subagent_segments[agent_name]:
+                                segment_content = segment["content"]
+                                segment_index = segment["segment_index"]
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{payload.message_id}:{agent_name}:segment:{segment_index}",
+                                    role="assistant",
+                                    content={"text": segment_content} if isinstance(segment_content, str) else segment_content,
+                                    meta={"agent": agent_name, "segment_index": segment_index},
+                                )
+                                write_sess.add(subagent_msg)
+                    
+                    # Also handle any remaining content for agents not in order
                     for agent_name, agent_content in subagent_content.items():
-                        if agent_name not in subagent_order and agent_content:
-                            subagent_msg = Message(
-                                thread_id=t.id,
-                                message_id=f"subagent:{payload.message_id}:{agent_name}",
-                                role="assistant",
-                                content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
-                                meta={"agent": agent_name},
-                            )
-                            write_sess.add(subagent_msg)
+                        if agent_name not in subagent_order and agent_content.strip():
+                            # If no segments exist, save as single message (backward compatibility)
+                            if agent_name not in subagent_segments:
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{payload.message_id}:{agent_name}",
+                                    role="assistant",
+                                    content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
+                                    meta={"agent": agent_name},
+                                )
+                                write_sess.add(subagent_msg)
                     
                     await write_sess.commit()
                     # If no supervisor message was saved, use None for message_id
@@ -1230,6 +1314,10 @@ async def post_message_stream(
                 },
             )
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        finally:
+            # Always clear context variables to prevent connection leaks
+            clear_db_session()
+            clear_thread_id()
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1256,7 +1344,7 @@ async def resume_thread(
     """
     from backend.graph.graph import make_graph
     from backend.main import get_thread_lock, _checkpointer_cm
-    from backend.graph.context import set_db_session, set_thread_id
+    from backend.graph.context import set_db_session, set_thread_id, clear_db_session, clear_thread_id
     from langgraph.types import Command
     import uuid as uuid_module
     
@@ -1307,6 +1395,9 @@ async def resume_thread(
                 supervisor_content = ""  # Supervisor messages (main response)
                 subagent_content = {}  # Subagent messages: {"data_analyst": "", "report_writer": "", "reviewer": ""}
                 subagent_order = []  # Track execution order: ["data_analyst", "reviewer", ...]
+                # Track segments for each agent (saved when tools start)
+                subagent_segments = {}  # {"data_analyst": [{"content": "...", "segment_index": 0}, ...]}
+                subagent_segment_counters = {}  # Track segment index per agent
                 tool_calls = []  # Track tool calls for persistence (same as POST /messages)
                 
                 # Track the last known agent node to handle cases where node becomes "model"/"tools"
@@ -1406,8 +1497,22 @@ async def resume_thread(
                         yield f"data: {json.dumps({'type': 'reviewing', 'status': 'start'})}\n\n"
                     
                     # Detect reviewer end
-                    elif event_type == "on_chat_model_end" and current_agent_node == "reviewer":
-                        yield f"data: {json.dumps({'type': 'reviewing', 'status': 'done'})}\n\n"
+                    # Send context update after any agent's chat model ends (including subagents)
+                    elif event_type == "on_chat_model_end" and current_agent_node:
+                        # Skip summarizer (handled separately) and supervisor (handled by on_chain_end)
+                        if current_agent_node not in ["summarizer", "supervisor"]:
+                            try:
+                                from backend.config import CONTEXT_WINDOW as DEFAULT_CONTEXT_WINDOW
+                                state_snapshot = await graph.aget_state(config)
+                                token_count = state_snapshot.values.get("token_count", 0) if state_snapshot.values else 0
+                                max_tokens = cfg.context_window if cfg and cfg.context_window else DEFAULT_CONTEXT_WINDOW
+                                yield f"data: {json.dumps({'type': 'context_update', 'tokens_used': token_count, 'max_tokens': max_tokens})}\n\n"
+                            except Exception as e:
+                                logging.warning(f"Failed to get state for context update after {current_agent_node} (resume): {e}")
+                            
+                            # Detect reviewer end (after context update)
+                            if current_agent_node == "reviewer":
+                                yield f"data: {json.dumps({'type': 'reviewing', 'status': 'done'})}\n\n"
                     
                     # Capture final assistant message (same as POST /messages)
                     elif event_type == "on_chat_model_end":
@@ -1424,6 +1529,28 @@ async def resume_thread(
                     elif event_type == "on_tool_start":
                         tool_input = event.get("data", {}).get("input")
                         yield f"data: {json.dumps({'type': 'tool_start', 'name': event_name, 'input': to_jsonable(tool_input)})}\n\n"
+                        
+                        # Save current segment for the active agent before tool starts
+                        if current_agent_node and current_agent_node in ["data_analyst", "report_writer", "reviewer"]:
+                            agent_name = current_agent_node
+                            if agent_name in subagent_content and subagent_content[agent_name].strip():
+                                # Initialize segments list and counter if needed
+                                if agent_name not in subagent_segments:
+                                    subagent_segments[agent_name] = []
+                                    subagent_segment_counters[agent_name] = 0
+                                
+                                # Save current content as a segment
+                                segment_content = subagent_content[agent_name]
+                                segment_index = subagent_segment_counters[agent_name]
+                                subagent_segments[agent_name].append({
+                                    "content": segment_content,
+                                    "segment_index": segment_index
+                                })
+                                subagent_segment_counters[agent_name] += 1
+                                
+                                # Reset content for next segment
+                                subagent_content[agent_name] = ""
+                                logging.debug(f"Saved segment {segment_index} for {agent_name} (resume), content length: {len(segment_content)}")
                     
                     elif event_type == "on_tool_end":
                         raw_output = event.get("data", {}).get("output")
@@ -1580,33 +1707,69 @@ async def resume_thread(
                     import asyncio
                     await asyncio.sleep(0.01)  # 10ms delay
                     
-                    # Save subagent messages AFTER supervisor
+                    # Save subagent segments AFTER supervisor
                     # Order subagents by their actual execution order (tracked during streaming)
                     # This ensures messages appear in the order they were executed, not a hardcoded order
                     for agent_name in subagent_order:
-                        if agent_name in subagent_content and subagent_content[agent_name]:
-                            agent_content = subagent_content[agent_name]
+                        # Save all segments for this agent
+                        if agent_name in subagent_segments:
+                            for segment in subagent_segments[agent_name]:
+                                segment_content = segment["content"]
+                                segment_index = segment["segment_index"]
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{resume_message_id}:{agent_name}:segment:{segment_index}",
+                                    role="assistant",
+                                    content={"text": segment_content} if isinstance(segment_content, str) else segment_content,
+                                    meta={"agent": agent_name, "segment_index": segment_index},
+                                )
+                                write_sess.add(subagent_msg)
+                                await asyncio.sleep(0.01)  # Small delay between each segment
+                        
+                        # Save any remaining content as final segment (if there's content after last tool)
+                        if agent_name in subagent_content and subagent_content[agent_name].strip():
+                            remaining_content = subagent_content[agent_name]
+                            # Get the next segment index
+                            segment_index = subagent_segment_counters.get(agent_name, 0)
                             subagent_msg = Message(
                                 thread_id=t.id,
-                                message_id=f"subagent:{resume_message_id}:{agent_name}",
+                                message_id=f"subagent:{resume_message_id}:{agent_name}:segment:{segment_index}",
                                 role="assistant",
-                                content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
-                                meta={"agent": agent_name},
+                                content={"text": remaining_content} if isinstance(remaining_content, str) else remaining_content,
+                                meta={"agent": agent_name, "segment_index": segment_index},
                             )
                             write_sess.add(subagent_msg)
-                            await asyncio.sleep(0.01)  # Small delay between each subagent
+                            await asyncio.sleep(0.01)  # Small delay
                     
                     # Handle any subagents not in the tracked order (shouldn't happen, but safety check)
+                    # Save their segments if they exist
+                    for agent_name in subagent_segments:
+                        if agent_name not in subagent_order:
+                            for segment in subagent_segments[agent_name]:
+                                segment_content = segment["content"]
+                                segment_index = segment["segment_index"]
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{resume_message_id}:{agent_name}:segment:{segment_index}",
+                                    role="assistant",
+                                    content={"text": segment_content} if isinstance(segment_content, str) else segment_content,
+                                    meta={"agent": agent_name, "segment_index": segment_index},
+                                )
+                                write_sess.add(subagent_msg)
+                    
+                    # Also handle any remaining content for agents not in order
                     for agent_name, agent_content in subagent_content.items():
-                        if agent_name not in subagent_order and agent_content:
-                            subagent_msg = Message(
-                                thread_id=t.id,
-                                message_id=f"subagent:{resume_message_id}:{agent_name}",
-                                role="assistant",
-                                content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
-                                meta={"agent": agent_name},
-                            )
-                            write_sess.add(subagent_msg)
+                        if agent_name not in subagent_order and agent_content.strip():
+                            # If no segments exist, save as single message (backward compatibility)
+                            if agent_name not in subagent_segments:
+                                subagent_msg = Message(
+                                    thread_id=t.id,
+                                    message_id=f"subagent:{resume_message_id}:{agent_name}",
+                                    role="assistant",
+                                    content={"text": agent_content} if isinstance(agent_content, str) else agent_content,
+                                    meta={"agent": agent_name},
+                                )
+                                write_sess.add(subagent_msg)
                     
                     await write_sess.commit()
                     # If no supervisor message was saved, use None for message_id
@@ -1618,6 +1781,10 @@ async def resume_thread(
         except Exception as e:
             logging.error(f"Resume failed for thread {thread_id}: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        finally:
+            # Always clear context variables to prevent connection leaks
+            clear_db_session()
+            clear_thread_id()
     
     return StreamingResponse(stream_resume(), media_type="text/event-stream")
 

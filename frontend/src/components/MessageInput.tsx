@@ -42,7 +42,13 @@ export function MessageInput() {
   const clearToolDrafts = useChatStore((state) => state.clearToolDrafts);
   const addSubagentDraft = useChatStore((state) => state.addSubagentDraft);
   const clearSubagentDrafts = useChatStore((state) => state.clearSubagentDrafts);
+  const finalizeSubagentDraft = useChatStore((state) => state.finalizeSubagentDraft);
+  const clearSubagentSegments = useChatStore((state) => state.clearSubagentSegments);
   const addArtifactBubble = useChatStore((state) => state.addArtifactBubble);
+  const removeSubagentSegments = useChatStore((state) => state.removeSubagentSegments);
+  
+  // Track the currently active agent (last agent that received tokens)
+  const activeAgentRef = useRef<string | null>(null);
   const clearArtifactBubbles = useChatStore((state) => state.clearArtifactBubbles);
   const contextUsage = useChatStore((state) => state.contextUsage);
   const isSummarizing = useChatStore((state) => state.isSummarizing);
@@ -112,6 +118,9 @@ export function MessageInput() {
     onSubagentToken: (agent, content) => {
       // Accumulate token chunks for subagent messages
       if (currentThreadId) {
+        // Track the active agent
+        activeAgentRef.current = agent;
+        
         // Get existing content or start fresh
         const existing = useChatStore.getState().subagentDrafts.find(
           (s) => s.threadId === currentThreadId && s.agent === agent
@@ -122,7 +131,14 @@ export function MessageInput() {
     },
     onToolStart: (name, input) => {
       console.log(`Tool started: ${name}`, input);
-      if (currentThreadId) addToolDraft(currentThreadId, name, input);
+      if (currentThreadId) {
+        // Finalize the current agent's draft if there is one
+        if (activeAgentRef.current) {
+          finalizeSubagentDraft(currentThreadId, activeAgentRef.current);
+          activeAgentRef.current = null;
+        }
+        addToolDraft(currentThreadId, name, input);
+      }
     },
     onToolEnd: (name, output, artifacts) => {
       console.log(`Tool finished: ${name}`, output, artifacts);
@@ -185,10 +201,17 @@ export function MessageInput() {
       clearDraft();
       clearThinkingBlock();
       
+      // Finalize any remaining subagent drafts before clearing
+      if (currentThreadId && activeAgentRef.current) {
+        finalizeSubagentDraft(currentThreadId, activeAgentRef.current);
+      }
+      activeAgentRef.current = null; // Reset active agent
+      
       // Clear any remaining tool drafts (handles failed tools that didn't send tool_end)
       if (currentThreadId) {
         clearToolDrafts(currentThreadId);
         clearSubagentDrafts(currentThreadId);
+        // Don't clear segments here - we'll keep them visible since backend only saves one message per agent
       }
       
       // Refetch all messages from DB to get the correct order (supervisor + subagents)
@@ -197,14 +220,31 @@ export function MessageInput() {
         // Short delay to ensure backend has committed all messages to DB
         setTimeout(async () => {
           try {
-            const messages = await listMessages(currentThreadId);
+            const fetchedMessages = await listMessages(currentThreadId);
+            const chronologicalMessages = [...fetchedMessages].reverse();
             
-            // Update store with fresh messages from DB (reversed for chronological order)
-            // Backend returns messages in desc order (newest first), reverse for display
-            setMessages(messages.reverse());
+            // Update store with fresh messages from DB (chronological order)
+            setMessages(chronologicalMessages);
+            
+            // Remove stale frontend segments for agents that now have saved segments
+            const segmentAgents = Array.from(
+              new Set(
+                chronologicalMessages
+                  .filter(
+                    (m) =>
+                      m.role === 'assistant' &&
+                      m.meta?.agent &&
+                      m.meta?.segment_index !== undefined
+                  )
+                  .map((m) => m.meta!.agent!)
+              )
+            );
+            if (segmentAgents.length > 0) {
+              removeSubagentSegments(currentThreadId, segmentAgents);
+            }
             
             // Check if ANY message in the thread has artifacts
-            const allArtifacts = messages
+            const allArtifacts = chronologicalMessages
               .filter(m => m.artifacts && m.artifacts.length > 0)
               .flatMap(m => m.artifacts || []);
             
@@ -215,6 +255,11 @@ export function MessageInput() {
             } else {
               console.log('No artifacts in DB yet, keeping bubbles visible');
             }
+            
+            // Note: We keep subagentSegments visible because the backend only saves
+            // one aggregated message per agent, but we want to show all the segments
+            // that were separated by tool calls. The segments will be cleared when
+            // the user switches threads or when a new stream starts.
           } catch (err) {
             console.error('Failed to fetch messages after done:', err);
           }
@@ -267,11 +312,17 @@ export function MessageInput() {
       }
     }
 
+    // Clear any finalized subagent segments from previous turns so they don't linger
+    if (threadId) {
+      clearSubagentSegments(threadId);
+    }
+    
     // Add user message to UI immediately (optimistic)
     const userMessageId = crypto.randomUUID();
     const userMsg: Message = {
       id: userMessageId,
       thread_id: threadId!,
+      message_id: userMessageId, // Set message_id so segments can be linked to this user message
       role: 'user',
       content: { text: userText },
     };
