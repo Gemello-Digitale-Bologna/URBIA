@@ -35,3 +35,13 @@ def get_thread_id() -> Optional[uuid.UUID]:
     """Get the thread ID from the current execution context."""
     return _thread_id.get()
 
+
+def clear_db_session() -> None:
+    """Clear the database session from the current execution context."""
+    _db_session.set(None)
+
+
+def clear_thread_id() -> None:
+    """Clear the thread ID from the current execution context."""
+    _thread_id.set(None)
+
