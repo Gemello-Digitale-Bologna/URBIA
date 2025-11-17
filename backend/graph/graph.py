@@ -138,7 +138,7 @@ def make_graph(
     model_name = model_name or DEFAULT_MODEL
     # Only pass temperature if explicitly set (config) or if env default exists
     temp = temperature if temperature is not None else DEFAULT_TEMPERATURE
-    print(f"[MODEL] Using model: {model_name} (temperature: {temp if temp is not None else 'default'})")
+    print(f"[MODEL] Using model: {model_name} (temperature: {temp if temp is not None else CONTEXT_WINDOW}), context window: {context_window if context_window is not None else CONTEXT_WINDOW}")
     llm_kwargs = {"model": model_name}
     if temp is not None:
         llm_kwargs["temperature"] = temp
@@ -304,13 +304,17 @@ def make_graph(
         summary = response["messages"][-1].content
 
         # Delete all but the 4 most recent messages
-        delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-4]]  
+        window = 4
+        delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][-window:]]  
+
+        post_summary_content = "\n".join([m.content for m in state["messages"][-window]])
+        post_summary_tokens = llm.get_num_tokens(post_summary_content)   # llm is the analyst one
         
         return Command(
                 update={
                     "summary": summary, 
                     "messages": delete_messages,
-                    "token_count": -1  # reset token count to zero
+                    "token_count": -post_summary_tokens  # reset token count to the number of tokens in the post-summary content (negative value = reset)
                     }, 
                 goto="data_analyst"  # go back to the data_analyst to answer the question
             )   
@@ -331,8 +335,10 @@ def make_graph(
         # TODO: last thing we could add is estimate tokens in summary and reset to those instead of 0... but they are few, so fine for now
         # (1) Check tokens BEFORE invoking analyst agent (Cursor-style: summarize first, then answer)
         current_tokens = state.get("token_count", 0)
+        print(f"***current_tokens: {current_tokens}")
         # Use thread-specific context_window or fall back to env default
         effective_context_window = context_window if context_window is not None else CONTEXT_WINDOW
+        print(f"***effective_context_window: {effective_context_window}")
         threshold = effective_context_window * 0.9
         if current_tokens >= threshold:
             # Route to summarization FIRST, then back to analyst agent
@@ -354,7 +360,7 @@ def make_graph(
 
         # (3) if there are any comments made from the reviewer, use them in the analysis invocation (if there are, it means analysis was rejected)
         analysis_comments = state.get("analysis_comments", "")  
-        if analysis_comments: # does this condition activate even if analysis_comments = "" ? because if so, we do not want that
+        if analysis_comments: # this condition does not activate if analysis_comments = ""
             messages += [HumanMessage(content=f"The reviewer reviewed your analysis and rejected it; improve your previous analysis following the following comments that the reviewer made: {analysis_comments}")]
         
         # (4) invoke the agent
@@ -362,14 +368,15 @@ def make_graph(
         last_msg = result["messages"][-1]
         meta = last_msg.usage_metadata
         input_tokens = meta["input_tokens"] if meta else 0
+        print(f"***input_tokens: {input_tokens}")
         code_logs = result.get("code_logs", "")
 
         # (5) check if code logs exceed token threshold: if so, chunk them 
         # NOTE: estimates are more accurate for openai models since they leverage tiktoken.
         code_logs_str = "\n".join([f"```python\n{code_log['input']}\n```\nstdout: ```bash\n{code_log['stdout']}\n```\nstderr: ```bash\n{code_log['stderr']}\n```" for code_log in code_logs])
         # count tokens
-        token_count = reviewer_llm.get_num_tokens(code_logs_str)
-        if token_count > 5000:
+        code_tokens = reviewer_llm.get_num_tokens(code_logs_str)
+        if code_tokens > 5000:
             # here we split the code logs into big chunks of 5000 tokens each, with big overlap for more context;
             splitter = TokenTextSplitter(
                 model_name=reviewer_llm.model_name, # now using gpt4.1; otherwise, cl100k_base is more model agnostic, and it's the same that get_num_tokens uses for claude models
@@ -432,9 +439,13 @@ def make_graph(
         
         messages += [HumanMessage(content="Perform your review based on the analysis performed and the sources used.")]
         result = await agent_reviewer.ainvoke({**state, "messages": messages})
+        last_msg = result["messages"][-1]
+        meta = last_msg.usage_metadata
+        input_tokens = meta["input_tokens"] if meta else 0
 
         return Command(
                 update={
+                    "token_count": input_tokens,  # Accumulates via reducer
                     "analysis_status": result["analysis_status"], 
                     "reroute_count": result.get("reroute_count", 0),
                     "analysis_comments" : result.get("analysis_comments", ""),
@@ -470,12 +481,15 @@ def make_graph(
         print("***invoking report writer agent in write_report_node")
         result = await agent_report_writer.ainvoke({**state, "messages": messages})  # inside here we have HITL
         last_msg = result["messages"][-1]
+        meta = last_msg.usage_metadata
+        input_tokens = meta["input_tokens"] if meta else 0
 
         return Command(
             update = {  
                 "messages": [last_msg],
                 "reports": result.get("reports", {}),  # Tool updated this
                 "last_report_title": result.get("last_report_title"),  # Tool updated this
+                "token_count": input_tokens,  # Accumulates via reducer
             },
             goto="supervisor"  
         )
