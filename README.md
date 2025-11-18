@@ -1,10 +1,10 @@
-# LG-Urban 🏙️
+# UrbIA
 
 **AI-powered urban data analysis platform for Bologna with sandboxed Python execution.**
 
 Built on LangGraph, this production-ready application combines conversational AI with secure code execution, civic dataset integration, and geographic visualization tools, enabling users to perform comprehensive data analysis on any datasets from [Bologna's OpenData](https://opendata.comune.bologna.it/).
 
-🚀 **Now deployed on Railway** [[live demo](https://your-app.railway.app)]
+🚀 **Now deployed on Railway** [[live demo](https://lg-urban-frontend-production.up.railway.app/)]
 
 ---
 
@@ -15,7 +15,7 @@ Built on LangGraph, this production-ready application combines conversational AI
 - Automatic context summarization when context window is exceeded
 - PostgreSQL-backed persistence with full message history
 - Per-thread LLM configuration (model, temperature, system prompt)
-- Support for GPT-4 and Claude models
+- Support for GPT and Claude models
 
 ### 🐍 Modal Sandbox Code Execution
 - Sandboxed Python execution leveraging [Modal.com](https://modal.com)
@@ -33,8 +33,6 @@ Built on LangGraph, this production-ready application combines conversational AI
 ### 📊 Report Writing
 - AI-generated comprehensive reports from analysis results
 - Human-in-the-loop approval workflow
-- Editable markdown reports with visualizations
-- Export to multiple formats
 
 ### 🗺️ Geographic Visualization
 - Interactive map integration for Bologna's geospatial data
@@ -130,7 +128,6 @@ Visit `http://localhost:5173` 🎉
 │  │  ├─ 🌐 Bologna OpenData API              │   │
 │  │  ├─ 📦 Dataset Management (S3)           │   │
 │  │  ├─ 🗺️  Geographic Tools                 │   │
-│  │  └─ 🔍 Internet Search                   │   │
 │  └───────────────────────────────────────────┘  │
 └─────┬────────┬──────────┬───────────────────────┘
       │        │          │
@@ -181,14 +178,13 @@ See [`backend/db/DB-README.md`](./backend/db/DB-README.md) for detailed schema, 
 - **Clerk** - Authentication provider
 
 ### AI/LLM
-- **OpenAI** (GPT-4) / **Anthropic** (Claude) - Language models
+- **OpenAI** (GPT) / **Anthropic** (Claude) - Language models
 - **LangChain** - LLM integration utilities
 
 ### DevOps & CI/CD
 - **GitHub Actions** - Automated testing and deployment
 - **Railway** - Backend and database hosting
 - **Docker** - Local development and testing
-- See [`.github/ACTIONS-README.md`](./.github/ACTIONS-README.md) for CI/CD details
 
 ---
 
@@ -203,11 +199,8 @@ The project includes comprehensive testing:
 
 Run tests locally:
 ```bash
-# Backend API tests (requires Docker Postgres)
-pytest tests/api/ -v
-
-# Modal function tests
-pytest backend/modal_runtime/tests/ -v
+# Backend tests (requires Docker Postgres)
+pytest tests/
 
 # Frontend checks
 cd frontend
@@ -216,8 +209,5 @@ npm run lint      # ESLint
 npm run build     # Production build
 ```
 
----
-
-## 📄 License
 
 
