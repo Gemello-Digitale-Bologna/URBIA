@@ -21,14 +21,6 @@ from backend.modal_runtime.session import session_base_dir
 from backend.graph.context import get_thread_id
 
 # ===== helpers =====
-# Lookup deployed Modal functions (using from_name)
-def _get_modal_function(name: str):
-    """Get a deployed Modal function by name."""
-    try:
-        return modal.Function.from_name("lg-urban-executor", name)
-    except Exception:
-        # Fallback to import for local development
-        raise Exception(f"Modal function {name} not found")
 
 # Session-based executor cache: one sandbox per session
 _executor_cache: Dict[str, SandboxExecutor] = {}
