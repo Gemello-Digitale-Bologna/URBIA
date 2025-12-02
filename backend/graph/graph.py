@@ -6,7 +6,7 @@ from langchain_anthropic import ChatAnthropic
 from langgraph.graph import StateGraph, START
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_text_splitters import TokenTextSplitter
-from langchain.agents.middleware import SummarizationMiddleware   
+from langchain.agents.middleware import SummarizationMiddleware, TodoListMiddleware   
 from langchain_core.messages import HumanMessage
 from pydantic import SecretStr
 from dotenv import load_dotenv
@@ -19,6 +19,7 @@ from backend.graph.prompts.analyst import PROMPT
 from backend.graph.prompts.report import report_prompt
 from backend.graph.prompts.reviewer import reviewer_prompt
 from backend.graph.prompts.supervisor import supervisor_prompt
+from backend.graph.prompts.todo import TODOS_TOOL_DESCRIPTION, WRITE_TODOS_SYSTEM_PROMPT
 
 from backend.graph.state import MyState
 
@@ -27,7 +28,6 @@ from backend.graph.tools.report_tools import (
     read_sources_tool, 
     write_report_tool, 
     write_source_tool, 
-    set_analysis_objectives_tool, 
     read_analysis_objectives_tool
 )
 from backend.graph.tools.review_tools import (
@@ -193,8 +193,7 @@ def make_graph(
         get_dataset_time_info_tool,
     ]
     report_tools = [
-        write_source_tool,
-        set_analysis_objectives_tool,
+        write_source_tool
     ]
     tools = [
         *api_tools,
@@ -222,27 +221,31 @@ def make_graph(
                 messages_to_keep=10,  # Keep last 10 messages after summary
                 summary_prompt=summarizer_prompt,  
             ),
+            TodoListMiddleware(
+                tool_description=TODOS_TOOL_DESCRIPTION,  # NOTE: customized to make the agent use todo list more often 
+                system_prompt=WRITE_TODOS_SYSTEM_PROMPT
+            ),
         ]
     )
 
     # ======= REPORT WRITER AGENT =======
-    # use claude 4.5 Haiku for report writer
-    report_writer_kwargs = {"model": "claude-haiku-4-5"}
-    if anthropic_api_key:
-        report_writer_kwargs['api_key'] = anthropic_api_key
+    # use gpt 4.1 for report writer instead of haiku
+    report_writer_kwargs = {"model": "gpt-4.1"}
+    if openai_api_key:
+        report_writer_kwargs['api_key'] = openai_api_key
 
-    report_writer_llm = ChatAnthropic(**report_writer_kwargs)
+    report_writer_llm = ChatOpenAI(**report_writer_kwargs)
     
     agent_report_writer = create_agent(
         model=report_writer_llm,
-        tools=[write_report_tool, read_sources_tool, read_analysis_objectives_tool],
+        tools=[write_report_tool, read_sources_tool],
         system_prompt=report_prompt,
         name="agent_report_writer",
         state_schema=MyState,
         middleware=[
             SummarizationMiddleware(
                 model=summarizer,
-                max_tokens_before_summary=effective_context_window,  # Trigger summarization at 20000 tokens
+                max_tokens_before_summary=effective_context_window,  
                 messages_to_keep=10,  # Keep last 10 messages after summary
                 summary_prompt="Summarize the conversation keeping the relevant details about the analysis performed.",  
             ),

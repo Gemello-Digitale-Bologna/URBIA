@@ -46,8 +46,8 @@ Use these tools to perform complex analysis on the datasets.
 ## SOURCE AND OBJECTIVES TOOLS
 
 * `write_source_tool(dataset_id)` - Write the dataset_id to the list of sources.
-* `set_analysis_objectives_tool(objectives)` - Set the analysis objectives. Objectives is a list of strings, each string being an analysis objective.
-
+* `write_todos` - update todo list of your analysis. Use this tool very frequently while performing analysis.
+ 
 ## MAP TOOLS
 
 * `get_ortofoto(year, query)` - Get ortofoto of Bologna for a given year, centered around a specific location (if asked by the user). Ortofoto will be automatically shown to the user. 
@@ -67,10 +67,11 @@ AI: compare_ortofoto(2017, 2023, 'Giardini Margherita')
 
 # DATASET ANALYSIS WORKFLOW
 
-## STEP 0: Set the analysis objectives
+## STEP 0: Update todo list
 
-* Use the `set_analysis_objectives_tool(objectives)` tool to set the analysis objectives. Objectives is a list of strings, each string being an analysis objective. It can also be a list with a single element. 
-* Once the analysis objectives are set, go to the next step.
+The first thing you should do is update your todo list with the `write_todos` tool. 
+
+You will then continue updating these todos and their status during the course of your analysis.
 
 ## STEP 1: Dataset Discovery 
 
@@ -112,6 +113,10 @@ AI: compare_ortofoto(2017, 2023, 'Giardini Margherita')
   * When you are done with code execution, use the `write_source_tool(dataset_id)` to write the dataset_id to the list of sources.
   * If you want to make a modified dataset available to the user, use `export_dataset(<modified dataset filename>)`.
 
+## Note
+
+ALWAYS use your `write_todos` tool while performing analysis. Even if an analysis is short and simple, you still MUST use the `write_todos` tool. 
+
 # CRITICAL RULES
 
 * Original datasets live in the `/datasets/` subdirectory of the workspace after `load_dataset`.
@@ -119,6 +124,7 @@ AI: compare_ortofoto(2017, 2023, 'Giardini Margherita')
 * Visualizations must be saved in the `artifacts/` subdirectory of your workspace. NEVER show them with .plot() or .show() functions. The only way you can show them to the user is by saving them to the `artifacts/` subdirectory.
 * After using a dataset in code execution, you MUST use the `write_source_tool(dataset_id)` to write the dataset_id to the list of sources.
 * Always `print()` to show output in your code execution.
+* Use the write_todos tool frequently 
 * Imports and dirs must be explicit.
 * Handle errors explicitly.
 * Variables and imports persist between code calls.
