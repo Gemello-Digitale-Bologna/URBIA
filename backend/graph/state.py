@@ -1,38 +1,11 @@
 from langchain.agents import AgentState
 from typing import Annotated, Literal
 
-def update_token_count(token_count: int | None = None, token_used: int | None = None) -> int:
-    """
-    Updates the token count
-    """
-    # init safeguards
-    if token_count is None:
-        token_count = 0
-    if token_used is None:
-        token_used = 0
-        
-    # a negative value means reset to that value (used for reset after summary)
-    if token_used < 0:
-        return token_used
-    else:
-        return token_count + token_used
-
 def merge_dicts(
     left: dict[str, str] | None = None,
     right: dict[str, str] | None = None
 ) -> dict[str, str]:
     """Merge two dictionaries. Left takes precedence over right. Used for reports."""
-    if left is None:
-        left = {}
-    if right is None:
-        right = {}
-    return {**left, **right}
-
-def merge_dicts_nested(
-    left: dict[str, dict[str, str]] | None = None, 
-    right: dict[str, dict[str, str]] | None = None
-) -> dict[str, dict[str, str]]:
-    """Merge two nested dictionaries. Left takes precedence over right. Used for sources."""
     if left is None:
         left = {}
     if right is None:
@@ -51,13 +24,12 @@ def list_add(
     
     return left + right
 
-
 def list_replace_str(
     left: list[str] | None,
     right: list[str] | None | int
 ) -> list[str]:
     """
-    Replace list of strings entirely instead of concatenating. Used for code logs chunks and analysis objectives.
+    Replace list of strings entirely instead of concatenating. Used for code logs chunks.
     """
     if left is None:
         left = []
@@ -138,7 +110,6 @@ class MyState(AgentState):
     
     # summary and token count features (core)
     summary : Annotated[str, str_replace]
-    token_count : Annotated[int, update_token_count]
     
     # report features 
     sources : Annotated[list[str], list_add_noduplicates] # list of dataset ids - no duplicated sources!
@@ -151,8 +122,7 @@ class MyState(AgentState):
     ## analysys 
     analysis_status : Annotated[Literal["pending", "approved", "rejected", "limit_exceeded", "end_flow"], status_replace]
     analysis_comments : Annotated[str, str_replace]  # comments for the analyst to improve the analysis
-    analysis_objectives: Annotated[list[str], list_replace_str] # objectives of the analysis
-    ## reroute afte review
+    ## reroute after review
     reroute_count: Annotated[int, int_add] # counter of how many times the analysis was re-routed to analyst with comments
     ## scores
     completeness_score : Annotated[int, int_replace]
