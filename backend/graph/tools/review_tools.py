@@ -99,7 +99,7 @@ async def update_completeness_score(grade: Annotated[int, "The grade of the comp
     num_todos = len(state.get('todos', []))
 
     if num_todos == 0: 
-        return Command(update={"messages" : [ToolMessage(content="todo list was empty: completeness score cannot be computed.")]})
+        return Command(update={"messages" : [ToolMessage(content="todo list was empty: completeness score cannot be computed.", tool_call_id=runtime.tool_call_id)]})
 
     print(f"***updating completeness score in update_completeness_score: {grade}")
 
@@ -120,29 +120,10 @@ async def update_relevancy_score(grade: Annotated[int, "The grade of the relevan
     num_sources = len(state.get('sources', []))
 
     if num_sources == 0:
-        return Command(update={"messages" : [ToolMessage(content="source list was empty: relevancy score cannot be computed.")]})
+        return Command(update={"messages" : [ToolMessage(content="source list was empty: relevancy score cannot be computed.", tool_call_id=runtime.tool_call_id)]})
 
     print(f"***updating relevancy score in update_relevancy_score: {grade}")
     return Command(update={
         "messages" : [ToolMessage(content=f"Relevancy score updated to: {grade/num_sources:.2f}", tool_call_id=runtime.tool_call_id)],
         "relevancy_score": grade/num_sources
-    })
-
-@tool
-async def complete_review_tool(runtime: ToolRuntime) -> Command:
-    """
-    Use this to complete the review.
-    Returns:
-        the final score between 0 and 1 as a percentage
-    """
-    completeness_score = runtime.state['completeness_score']
-    relevancy_score = runtime.state['relevancy_score']
-    # average scores
-    final_score = (completeness_score + relevancy_score)/2    
-
-    print(f"***completing review in complete_review_tool: final score is {final_score}")
-    return Command(update={
-        "messages" : [ToolMessage(content=f"Analysis review completed: final score is {final_score}. Analysis approved", tool_call_id=runtime.tool_call_id)],
-        "final_score" : final_score,
-        "analysis_status": "approved"
     })
