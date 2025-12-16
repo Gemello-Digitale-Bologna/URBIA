@@ -29,7 +29,6 @@ from backend.graph.tools.report_tools import (
 )
 from backend.graph.tools.review_tools import (
     approve_analysis_tool, 
-    complete_review_tool, 
     reject_analysis_tool, 
     update_completeness_score, 
     update_relevancy_score, 
@@ -265,10 +264,10 @@ def make_graph(
             read_sources_tool, 
             read_analysis_objectives_tool, 
             approve_analysis_tool,
-            reject_analysis_tool, 
-            complete_review_tool, 
+            reject_analysis_tool,  
             update_completeness_score, 
             update_relevancy_score, 
+            list_catalog_tool
         ],
         system_prompt=reviewer_prompt,
         name="agent_reviewer",
@@ -327,6 +326,9 @@ def make_graph(
             code_logs_chunks = [code_logs_str]
 
         # (4) update and route back
+        # NOTE: if you do not update todos here, the todos are not generally updated! then you canno access them from reviewer
+        todos = result.get("todos", [])
+
         return Command(
                 update={
                     "messages": msg_update,
@@ -334,7 +336,8 @@ def make_graph(
                     "code_logs_chunks" : code_logs_chunks,
                     "sources": result["sources"],  # updated by analyst
                     "analysis_comments" : "", # reset analysis comments (if there were any, we used them)
-                    "analysis_status" : "pending" # means the analyst performed it, waits for review
+                    "analysis_status" : "pending", # means the analyst performed it, waits for review
+                    "todos" : todos, # propagate the todos 
                 }, 
                 goto="supervisor"
             )
@@ -368,12 +371,26 @@ def make_graph(
         messages += [HumanMessage(content="Perform your review based on the analysis performed and the sources used.")]
         result = await agent_reviewer.ainvoke({**state, "messages": messages})
 
+        messages = result.get("messages", [])
+        last_msg = messages[-1]
+
+        # compute the score of the review
+        completeness_score = result["completeness_score"]
+        relevancy_score = result["relevancy_score"]
+        final_score = (completeness_score + relevancy_score)/2
+
+        # NOTE: right now we are not handling the case where the review should not be approved because of a low score:
+        # instead we always approve and just show the score in frontend. 
+
         return Command(
                 update={
                     "analysis_status": result["analysis_status"], 
                     "reroute_count": result.get("reroute_count", 0),
                     "analysis_comments" : result.get("analysis_comments", ""),
-                    "messages" : result.get("messages")
+                    "messages" : [HumanMessage(content=last_msg.content)],
+                    "completeness_score" : result["completeness_score"],
+                    "relevancy_score" : result["relevancy_score"],
+                    "final_score" : final_score,
                 },
                 goto="supervisor"
             )
@@ -403,7 +420,7 @@ def make_graph(
 
         return Command(
             update = {  
-                "messages": [last_msg],
+                "messages": [HumanMessage(content=last_msg.content)],
                 "reports": result.get("reports", {}),  # Tool updated this
                 "last_report_title": result.get("last_report_title"),  # Tool updated this
             },
