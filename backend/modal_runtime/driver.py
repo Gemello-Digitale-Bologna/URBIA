@@ -8,7 +8,9 @@ from io import StringIO
 from pathlib import Path
 
 
-def scan_and_upload_artifacts(processed_artifacts: set, s3_bucket: str, s3_client):
+def scan_and_upload_artifacts(
+    processed_artifacts: set, s3_bucket: str, s3_client, disable_upload: bool = False
+):
     """Scan workspace for new artifacts and upload to S3."""
     artifacts = []
 
@@ -52,16 +54,18 @@ def scan_and_upload_artifacts(processed_artifacts: set, s3_bucket: str, s3_clien
                     "size": size,
                 }
 
-                # Read file content
-                file_bytes = file_path.read_bytes()
-                # Generate S3 key (content-addressed)
-                s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
-                # Upload to S3
-                s3_client.put_object(
-                    Bucket=s3_bucket, Key=s3_key, Body=file_bytes, ContentType=mime
-                )
-                art["s3_key"] = s3_key
-                art["s3_url"] = f"s3://{s3_bucket}/{s3_key}"
+                # Only upload to S3 if not disabled
+                if not disable_upload:
+                    # Read file content
+                    file_bytes = file_path.read_bytes()
+                    # Generate S3 key (content-addressed)
+                    s3_key = f"output/artifacts/{sha256[:2]}/{sha256[2:4]}/{sha256}"
+                    # Upload to S3
+                    s3_client.put_object(
+                        Bucket=s3_bucket, Key=s3_key, Body=file_bytes, ContentType=mime
+                    )
+                    art["s3_key"] = s3_key
+                    art["s3_url"] = f"s3://{s3_bucket}/{s3_key}"
 
                 artifacts.append(art)
 
@@ -80,12 +84,19 @@ def driver_program():
     globals_dict = {}  # Persistent namespace for user code
     processed_artifacts = set()  # Track processed artifacts to avoid duplicates
 
-    # Initialize S3 client with Signature Version 4
-    region = os.getenv("AWS_REGION", "eu-central-1")
-    s3_client = boto3.client(
-        "s3", region_name=region, config=Config(signature_version="s3v4")
-    )
-    s3_bucket = os.getenv("S3_BUCKET", "lg-urban-prod")
+    # Check if S3 upload is disabled (for testing)
+    disable_s3_upload = os.getenv("S3_DISABLE_UPLOAD", "0") == "1"
+
+    # Initialize S3 client with Signature Version 4 (only if upload is enabled)
+    if not disable_s3_upload:
+        region = os.getenv("AWS_REGION", "eu-central-1")
+        s3_client = boto3.client(
+            "s3", region_name=region, config=Config(signature_version="s3v4")
+        )
+        s3_bucket = os.getenv("S3_BUCKET", "lg-urban-prod")
+    else:
+        s3_client = None
+        s3_bucket = None
 
     artifacts_dir = Path.cwd() / "artifacts"
     if not artifacts_dir.exists():
@@ -127,7 +138,10 @@ def driver_program():
 
             # Scan and upload artifacts after execution
             artifacts = scan_and_upload_artifacts(
-                processed_artifacts, s3_bucket, s3_client
+                processed_artifacts,
+                s3_bucket,
+                s3_client,
+                disable_upload=disable_s3_upload,
             )
 
             # Emit exactly one JSON line per command
