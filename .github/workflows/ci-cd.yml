@@ -93,7 +93,7 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
         run: |
           echo "Testing sandbox tools (load, list, export datasets)..."
-          pytest tests/graph/test_sandbox_tools.py tests/tools/test_load_to_sandbox.py tests/tools/test_export_from_sandbox.py -v --tb=short
+          pytest tests/tools/test_sandbox_tools.py tests/tools/test_load_to_sandbox.py tests/tools/test_export_from_sandbox.py -v --tb=short
 
   # Test database migrations with Docker Postgres
   test-migrations:
